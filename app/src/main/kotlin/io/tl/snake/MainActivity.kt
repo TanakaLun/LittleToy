@@ -49,12 +49,10 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
     var highScore by remember { mutableIntStateOf(0) }
     val colorScheme = MaterialTheme.colorScheme
 
-    // 自动更新最高分
     LaunchedEffect(state.score) {
         if (state.score > highScore) highScore = state.score
     }
 
-    // 游戏循环
     LaunchedEffect(state.isGameOver, state.isPaused) {
         while (!state.isGameOver && !state.isPaused) {
             val speed = (150 - (state.score / 50 * 10)).coerceAtLeast(80).toLong()
@@ -67,7 +65,6 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxSize().padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // --- 记分与控制区 ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -75,7 +72,6 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
         ) {
             ScoreDisplay("SCORE", state.score, colorScheme.primary)
             
-            // 暂停/恢复 按钮
             FilledTonalIconButton(
                 onClick = { state = state.copy(isPaused = !state.isPaused) },
                 enabled = !state.isGameOver,
@@ -83,7 +79,7 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
             ) {
                 Icon(
                     imageVector = if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                    contentDescription = "Pause/Resume"
+                    contentDescription = null
                 )
             }
             
@@ -92,7 +88,6 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- 游戏画布区 ---
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -110,7 +105,6 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
             Canvas(modifier = Modifier.fillMaxSize().padding(12.dp)) {
                 val cellSize = size.width / GameConfig.GRID_SIZE
 
-                // 食物渲染 (Tertiary 强调色)
                 drawCircle(
                     color = colorScheme.tertiary,
                     radius = cellSize / 2.8f,
@@ -120,7 +114,6 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
                     )
                 )
 
-                // 蛇身渲染
                 state.snake.forEachIndexed { index, segment ->
                     val isHead = index == 0
                     drawRoundRect(
@@ -132,8 +125,8 @@ fun SnakeGameScreen(modifier: Modifier = Modifier) {
                 }
             }
 
-            // 状态覆盖层 (暂停或结束)
-            AnimatedVisibility(
+            // 修复：显式使用顶层 AnimatedVisibility 函数，避免 Box 作用域冲突
+            androidx.compose.animation.AnimatedVisibility(
                 visible = state.isPaused || state.isGameOver,
                 enter = fadeIn() + scaleIn(),
                 exit = fadeOut() + scaleOut(),
@@ -158,7 +151,8 @@ fun ScoreDisplay(label: String, value: Int, color: Color) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(alpha = 0.7f))
         AnimatedContent(
             targetState = value,
-            transitionSpec = { slideInVertically { it } + fadeIn() togetherWith slideOutVertically { -it } + fadeOut() }
+            transitionSpec = { slideInVertically { it } + fadeIn() togetherWith slideOutVertically { -it } + fadeOut() },
+            label = "scoreAnimation"
         ) { targetValue ->
             Text("$targetValue", style = MaterialTheme.typography.titleLarge, color = color)
         }
@@ -183,7 +177,7 @@ fun OverlayCard(state: SnakeState, onRestart: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(16.dp))
             Button(onClick = onRestart) {
-                Icon(Icons.Default.Refresh, null)
+                Icon(Icons.Default.Refresh, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("RESTART")
             }
