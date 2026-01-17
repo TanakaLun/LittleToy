@@ -12,7 +12,7 @@ android {
     defaultConfig {
         applicationId = "io.tl.snake"
         minSdk = 35
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
@@ -34,8 +34,7 @@ android {
 
             proguardFiles(
                 // Default file with automatically generated optimization rules.
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                
+                getDefaultProguardFile("proguard-android-optimize.txt")
             )
         }
     }

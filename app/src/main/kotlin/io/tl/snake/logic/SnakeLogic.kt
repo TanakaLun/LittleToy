@@ -4,7 +4,7 @@ import kotlin.random.Random
 
 object GameConfig {
     const val GRID_SIZE = 20
-    const val VERSION = "1.2.4" // 版本号
+    const val VERSION = "1.3.0"
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
@@ -18,10 +18,9 @@ data class SnakeState(
     val specialItem: SpecialItem? = null,
     val direction: Direction = Direction.UP,
     val isGameOver: Boolean = false,
-    val isPaused: Boolean = true, // 初始设为暂停（等待开始）
-    val isStarted: Boolean = false, // 标记游戏是否真正开始
+    val isPaused: Boolean = false,
+    val isStarted: Boolean = false, // 是否已经点击“开始”
     val score: Int = 0,
-    val highScore: Int = 0, // 历史最高分
     val hasShield: Boolean = false,
     val isInvincible: Boolean = false,
     val invincibleTimeLeft: Long = 0
@@ -30,7 +29,7 @@ data class SnakeState(
 data class GameSettings(
     val showGrid: Boolean = true,
     val isDeveloperMode: Boolean = false,
-    val isLoopMode: Boolean = false // 轮回模式
+    val isLoopMode: Boolean = false
 )
 
 fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
@@ -49,29 +48,30 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     }
 
     // 碰撞检测与轮回逻辑
-    val isOut = nextX !in 0 until GameConfig.GRID_SIZE || nextY !in 0 until GameConfig.GRID_SIZE
+    val isOutOfBounds = nextX !in 0 until GameConfig.GRID_SIZE || nextY !in 0 until GameConfig.GRID_SIZE
     
-    if (isOut) {
+    if (isOutOfBounds) {
         if (settings.isLoopMode) {
-            // 轮回模式：从另一侧穿出
+            // 轮回模式：坐标取模实现穿墙
             nextX = (nextX + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
             nextY = (nextY + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
-        } else if (!state.hasShield) {
-            return state.copy(isGameOver = true)
-        } else {
+        } else if (state.hasShield) {
             return triggerShield(state)
+        } else {
+            return state.copy(isGameOver = true)
         }
     }
 
     val newHead = nextX to nextY
-    val hitSelf = state.snake.contains(newHead) && !state.isInvincible
-    
-    if (hitSelf) {
+    // 自身碰撞检测
+    if (state.snake.contains(newHead) && !state.isInvincible) {
         return if (state.hasShield) triggerShield(state) else state.copy(isGameOver = true)
     }
 
-    // 移动与进食逻辑
-    val newSnake = mutableListOf(newHead) + state.snake
+    // 移动逻辑：使用 MutableList 确保 removeAt 可用
+    val newSnake = state.snake.toMutableList()
+    newSnake.add(0, newHead)
+
     var currentScore = state.score
     var currentFood = state.food
     var currentItem = state.specialItem
@@ -80,6 +80,7 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     if (newHead == state.food) {
         currentScore += 10
         currentFood = Random.nextInt(GameConfig.GRID_SIZE) to Random.nextInt(GameConfig.GRID_SIZE)
+        // 10% 几率产生盾牌
         if (Random.nextFloat() < 0.1f && currentItem == null) {
             currentItem = SpecialItem(Random.nextInt(GameConfig.GRID_SIZE) to Random.nextInt(GameConfig.GRID_SIZE), ItemType.SHIELD)
         }
