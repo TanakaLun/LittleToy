@@ -1,0 +1,240 @@
+name: Build Toy APK
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      build_all:
+        type: choice
+        description: '选择编译类型'
+        required: true
+        default: 'both'
+        options:
+          - 'both'
+          - 'debug'
+          - 'release'
+      custom_version_name:
+        type: string
+        description: '自定义版本名称（可选，留空则使用短提交哈希）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.build_all == 'both' || github.event.inputs.build_all == 'debug'
+    outputs:
+      build_timestamp: ${{ steps.build_info.outputs.build_timestamp }}
+    env:
+      NATIVE_TARGET: "arm64-v8a"
+      BUILD_TYPE: "debug"
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有提交历史，用于计算版本号
+      
+      - name: 🛠️ Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: 💻 Set up Android SDK and NDK
+        uses: android-actions/setup-android@v3
+      
+      - name: ⚙️ Calculate Version Info
+        id: version_info
+        env:
+          COMMIT_ID: ${{ github.sha }}
+        run: |
+          # 获取短提交哈希（前7位）
+          COMMIT_ID_SHORT=${COMMIT_ID::7}
+          echo "commit_short=$COMMIT_ID_SHORT" >> $GITHUB_OUTPUT
+          
+          # 计算版本号（提交总数+1，从2开始）
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          VERSION_CODE=$((COMMIT_COUNT + 1))
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          
+          # 确定版本名称
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.custom_version_name }}" ]]; then
+            # 手动触发且有自定义版本名称
+            VERSION_NAME="${{ github.event.inputs.custom_version_name }}"
+            echo "Using custom version name: $VERSION_NAME"
+          else
+            # 使用短提交哈希
+            VERSION_NAME="$COMMIT_ID_SHORT"
+          fi
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          
+          echo "Version Code: $VERSION_CODE"
+          echo "Version Name: $VERSION_NAME"
+      
+      - name: 🛠️ Modify Gradle Build File
+        run: |
+          # 查找并修改 build.gradle
+          GRADLE_FILE="app/build.gradle"
+          
+          echo "Found gradle file: $GRADLE_FILE"
+            
+          # 备份原始文件
+          cp "$GRADLE_FILE" "${GRADLE_FILE}.bak"
+
+          sed -i -E "s/versionCode[[:space:]]+[0-9]+/versionCode ${{ steps.version_info.outputs.version_code }}/g" "$GRADLE_FILE"
+          sed -i -E "s/versionName[[:space:]]+'[^']*'/versionName '${{ steps.version_info.outputs.version_name }}'/g" "$GRADLE_FILE"
+            
+          echo "Modified versionCode to: ${{ steps.version_info.outputs.version_code }}"
+          echo "Modified versionName to: ${{ steps.version_info.outputs.version_name }}"
+            
+          # 显示修改后的相关行
+          echo "Modified lines:"
+          grep -n "versionCode\|versionName" "$GRADLE_FILE" || true
+      
+      - name: ⚙️ Grant execute permission to gradlew
+        run: chmod +x gradlew
+      
+      - name: 🏗️ Build Debug APK
+        run: ./gradlew assembleDebug
+      
+      - name: 📦 Find APK file and rename
+        id: build_info
+        env:
+          COMMIT_SHORT: ${{ steps.version_info.outputs.commit_short }}
+          VERSION_CODE: ${{ steps.version_info.outputs.version_code }}
+        run: |
+          BUILD_TIMESTAMP=$(date +%s)
+          echo "build_timestamp=$BUILD_TIMESTAMP" >> $GITHUB_OUTPUT
+
+          ORIGINAL_APK_PATH=$(find ${{ github.workspace }}/app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
+          NEW_APK_NAME="Toy-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
+          
+          # 重命名 APK 文件
+          NEW_APK_DIR=$(dirname "$ORIGINAL_APK_PATH")
+          NEW_APK_PATH="$NEW_APK_DIR/$NEW_APK_NAME"
+          mv "$ORIGINAL_APK_PATH" "$NEW_APK_PATH"
+          echo "apk_path=$NEW_APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found and renamed APK to: $NEW_APK_PATH"
+      
+      - name: 📤 Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toy-debug-v${{ steps.version_info.outputs.version_code }}
+          path: ${{ steps.build_info.outputs.apk_path }}
+          retention-days: 7
+
+  build-release:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.inputs.build_all == 'both' || github.event.inputs.build_all == 'release'
+    outputs:
+      build_timestamp: ${{ steps.build_info.outputs.build_timestamp }}
+    env:
+      NATIVE_TARGET: "arm64-v8a"
+      BUILD_TYPE: "release"
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4g -XX:MaxMetaspaceSize=1g'"
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有提交历史，用于计算版本号
+      
+      - name: 🛠️ Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: 💻 Set up Android SDK and NDK
+        uses: android-actions/setup-android@v3
+      
+      - name: ⚙️ Calculate Version Info
+        id: version_info
+        env:
+          COMMIT_ID: ${{ github.sha }}
+        run: |
+          # 获取短提交哈希（前7位）
+          COMMIT_ID_SHORT=${COMMIT_ID::7}
+          echo "commit_short=$COMMIT_ID_SHORT" >> $GITHUB_OUTPUT
+          
+          # 计算版本号（提交总数+1，从2开始）
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          VERSION_CODE=$((COMMIT_COUNT + 1))
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          
+          # 确定版本名称
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.custom_version_name }}" ]]; then
+            # 手动触发且有自定义版本名称
+            VERSION_NAME="${{ github.event.inputs.custom_version_name }}"
+            echo "Using custom version name: $VERSION_NAME"
+          else
+            # 使用短提交哈希
+            VERSION_NAME="$COMMIT_ID_SHORT"
+          fi
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          
+          echo "Version Code: $VERSION_CODE"
+          echo "Version Name: $VERSION_NAME"
+      
+      - name: 🛠️ Modify Gradle Build File
+        run: |
+          # 查找并修改 build.gradle
+          GRADLE_FILE="app/build.gradle"
+          
+          echo "Found gradle file: $GRADLE_FILE"
+            
+          # 备份原始文件
+          cp "$GRADLE_FILE" "${GRADLE_FILE}.bak"
+            
+          sed -i -E "s/versionCode[[:space:]]+[0-9]+/versionCode ${{ steps.version_info.outputs.version_code }}/g" "$GRADLE_FILE"
+          sed -i -E "s/versionName[[:space:]]+'[^']*'/versionName '${{ steps.version_info.outputs.version_name }}'/g" "$GRADLE_FILE"
+            
+          echo "Modified versionCode to: ${{ steps.version_info.outputs.version_code }}"
+          echo "Modified versionName to: ${{ steps.version_info.outputs.version_name }}"
+            
+          # 显示修改后的相关行
+          echo "Modified lines:"
+          grep -n "versionCode\|versionName" "$GRADLE_FILE" || true
+      
+      - name: ⚙️ Grant execute permission to gradlew
+        run: chmod +x gradlew
+
+      - name: Export keystore.properties
+        run: |
+          echo "${{ secrets.PASSWORD }}" | base64 -d > keystore.properties
+          chmod -x keystore.properties
+          
+          echo "${{ secrets.KEY }}" | base64 -d > app/TanakaLun.keystore
+          chmod -x app/TanakaLun.keystore
+                
+      - name: 🏗️ Build Release APK
+        run: ./gradlew assembleRelease
+      
+      - name: 📦 Find APK file and rename
+        id: build_info
+        env:
+          COMMIT_SHORT: ${{ steps.version_info.outputs.commit_short }}
+          VERSION_CODE: ${{ steps.version_info.outputs.version_code }}
+        run: |
+          BUILD_TIMESTAMP=$(date +%s)
+          echo "build_timestamp=$BUILD_TIMESTAMP" >> $GITHUB_OUTPUT
+
+          ORIGINAL_APK_PATH=$(find ${{ github.workspace }}/app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
+          NEW_APK_NAME="Toy-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
+          
+          # 重命名 APK 文件
+          NEW_APK_DIR=$(dirname "$ORIGINAL_APK_PATH")
+          NEW_APK_PATH="$NEW_APK_DIR/$NEW_APK_NAME"
+          mv "$ORIGINAL_APK_PATH" "$NEW_APK_PATH"
+          echo "apk_path=$NEW_APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found and renamed APK to: $NEW_APK_PATH"
+      
+      - name: 📤 Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toy-release-v${{ steps.version_info.outputs.version_code }}
+          path: ${{ steps.build_info.outputs.apk_path }}
+          retention-days: 7
