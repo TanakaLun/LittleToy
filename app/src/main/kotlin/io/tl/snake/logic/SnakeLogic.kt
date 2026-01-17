@@ -64,7 +64,7 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
 
     if (nH == itm?.pos) { sh = true; itm = null; sc += 50 }
 
-    return state.copy(snake = nS, food = fd, score = sc, specialItem = itm, hasShield = sh, 
+    return state.copy(snake = nS, food = fd, score = sc, specialItem = itm, hasShield = sh, isStarted = true, 
         highScore = if (sc > state.highScore) sc else state.highScore)
 }
 

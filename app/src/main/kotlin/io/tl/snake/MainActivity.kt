@@ -59,11 +59,10 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { p ->
                     Box(Modifier.padding(p)) {
-                        // 修复错误 70e: 传入了正确的 settings 参数
-                        GameContent(state, settings) { state = it }
+                        GameContent(state = state, settings = settings, onStateChange = { state = it })
                         
                         if (showSet) {
-                            SettingsDialog(settings, { showSet = false }) { settings = it }
+                            SettingsDialog(settings = settings, onDismiss = { showSet = false }, onUpdate = { settings = it })
                         }
                     }
                 }
@@ -73,63 +72,134 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, onUpdate: (SnakeState) -> Unit) {
-    val color = MaterialTheme.colorScheme
+fun GameContent(
+    state: SnakeState,
+    settings: GameSettings,
+    onStateChange: (SnakeState) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
     
-    // 修复 71e-75e: 动画相关的 Unresolved reference
-    val infiniteTransition = rememberInfiniteTransition(label = "")
+    // --- 动画效果 ---
+    val infiniteTransition = rememberInfiniteTransition(label = "foodPulse")
     val foodPulse by infiniteTransition.animateFloat(
-        initialValue = 0.8f, targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(tween(600, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = ""
+        initialValue = 0.8f,
+        targetValue = 1.1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "pulse"
     )
 
+    // --- 核心游戏循环 ---
+    // 注意：我们将 settings 加入 Keys，确保配置变化时循环能感知（特别是速度或模式变化）
     LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
         while (!state.isGameOver && !state.isPaused && state.isStarted) {
+            // 基础延迟 120ms
             delay(120L)
+            
+            // 执行逻辑计算
             var next = gameTick(state, settings)
+            
+            // 处理无敌时间
             if (state.isInvincible) {
-                val rem = state.invincibleTimeLeft - 120
-                next = if (rem <= 0) next.copy(isInvincible = false) else next.copy(invincibleTimeLeft = rem)
+                val remain = state.invincibleTimeLeft - 120
+                next = if (remain <= 0) next.copy(isInvincible = false) 
+                       else next.copy(invincibleTimeLeft = remain)
             }
-            onUpdate(next)
+            onStateChange(next)
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-            ScoreColumn("HIGH", state.highScore, color.secondary)
-            ScoreColumn("SCORE", state.score, color.primary)
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 顶部信息
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            ScoreColumn("HIGH", state.highScore, colorScheme.secondary)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.hasShield) Icon(Icons.Default.Shield, null, tint = Color(0xFF4CAF50))
+                if (state.isInvincible) Icon(Icons.Default.Bolt, null, tint = Color(0xFFFFC107))
+            }
+            ScoreColumn("SCORE", state.score, colorScheme.primary)
         }
+
         Spacer(Modifier.height(20.dp))
+
+        // 画布容器
         Box(
-            Modifier.weight(1f).aspectRatio(1f).background(color.surfaceVariant, MaterialTheme.shapes.large)
-                .pointerInput(Unit) { detectDragGestures { _, drag -> onUpdate(handleSwipe(state, drag.x, drag.y)) } },
+            modifier = Modifier
+                .weight(1f).aspectRatio(1f)
+                .background(colorScheme.surfaceContainerHigh, MaterialTheme.shapes.extraLarge)
+                .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
+                    // 只有在游戏进行中才拦截手势
+                    if (state.isStarted && !state.isPaused && !state.isGameOver) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val nextDirState = handleSwipe(state, dragAmount.x, dragAmount.y)
+                            if (nextDirState.direction != state.direction) {
+                                onStateChange(nextDirState)
+                            }
+                        }
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
-            Canvas(Modifier.fillMaxSize().padding(12.dp)) {
-                val sz = size.width / GameConfig.GRID_SIZE
+            Canvas(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                val cellSize = size.width / GameConfig.GRID_SIZE
+
+                // 1. 绘制网格 (修复失效问题)
                 if (settings.showGrid) {
                     for (i in 0..GameConfig.GRID_SIZE) {
-                        drawLine(color.outlineVariant.copy(0.2f), Offset(i*sz, 0f), Offset(i*sz, size.height))
-                        drawLine(color.outlineVariant.copy(0.2f), Offset(0f, i*sz), Offset(size.width, i*sz))
+                        val pos = i * cellSize
+                        drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(pos, 0f), Offset(pos, size.height), 1f)
+                        drawLine(colorScheme.outlineVariant.copy(0f, pos), Offset(size.width, pos), 1f) // 修正：应为 horizontal line
+                        drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(0f, pos), Offset(size.width, pos), 1f)
                     }
                 }
-                state.snake.forEachIndexed { i, p ->
-                    drawRoundRect(if(i==0) color.primary else color.primaryContainer, Offset(p.first*sz+2f, p.second*sz+2f), Size(sz-4f, sz-4f), CornerRadius(4.dp.toPx()))
+
+                // 2. 绘制蛇
+                state.snake.forEachIndexed { index, p ->
+                    val alpha = if (state.isInvincible && (state.invincibleTimeLeft / 200 % 2 == 0L)) 0.4f else 1f
+                    drawRoundRect(
+                        color = if (index == 0) colorScheme.primary else colorScheme.primaryContainer.copy(alpha = alpha),
+                        topLeft = Offset(p.first * cellSize + 2f, p.second * cellSize + 2f),
+                        size = Size(cellSize - 4f, cellSize - 4f),
+                        cornerRadius = CornerRadius(4.dp.toPx())
+                    )
                 }
-                drawCircle(color.tertiary, (sz/3f)*foodPulse, Offset(state.food.first*sz+sz/2, state.food.second*sz+sz/2))
+
+                // 3. 绘制食物
+                drawCircle(
+                    color = colorScheme.tertiary,
+                    radius = (cellSize / 3f) * foodPulse,
+                    center = Offset(state.food.first * cellSize + cellSize / 2, state.food.second * cellSize + cellSize / 2)
+                )
             }
 
+            // --- UI 遮罩层 ---
+            
+            // 未开始状态：只在 isStarted 为 false 时显示
             if (!state.isStarted) {
-                // 修复 76e: CircleShape
-                Surface(onClick = { onUpdate(state.copy(isStarted = true, isPaused = false)) }, shape = CircleShape, color = color.primary) {
-                    Text("START", Modifier.padding(24.dp))
+                Surface(
+                    onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) },
+                    color = colorScheme.primary,
+                    shape = CircleShape,
+                    shadowElevation = 8.dp
+                ) {
+                    Text("START GAME", Modifier.padding(horizontal = 32.dp, vertical = 16.dp), color = colorScheme.onPrimary)
                 }
             }
 
-            if (state.isPaused || state.isGameOver) {
-                OverlayCard(state) { onUpdate(if(state.isGameOver) SnakeState(highScore = state.highScore, isStarted = true) else state.copy(isPaused = false)) }
+            // 暂停或结束
+            if (state.isStarted && (state.isPaused || state.isGameOver)) {
+                OverlayCard(state) {
+                    if (state.isGameOver) {
+                        onStateChange(SnakeState(highScore = state.highScore, isStarted = true))
+                    } else {
+                        onStateChange(state.copy(isPaused = false))
+                    }
+                }
             }
         }
     }
