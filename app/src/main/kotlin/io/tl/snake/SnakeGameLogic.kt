@@ -3,14 +3,30 @@ package io.tl.snake
 import kotlin.random.Random
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
+enum class ItemType { FOOD, SHIELD, SPEED_BOOST }
+
+data class SpecialItem(
+    val pos: Pair<Int, Int>,
+    val type: ItemType
+)
 
 data class SnakeState(
     val snake: List<Pair<Int, Int>> = listOf(10 to 10, 10 to 11, 10 to 12),
     val food: Pair<Int, Int> = 5 to 5,
+    val specialItem: SpecialItem? = null,
     val direction: Direction = Direction.UP,
     val isGameOver: Boolean = false,
-    val isPaused: Boolean = false, // 新增：暂停状态
-    val score: Int = 0
+    val isPaused: Boolean = false,
+    val score: Int = 0,
+    // Buff 状态
+    val hasShield: Boolean = false,
+    val isInvincible: Boolean = false,
+    val invincibleTimeLeft: Int = 0 // 剩余无敌时间（毫秒）
+)
+
+data class GameSettings(
+    val showGrid: Boolean = true,
+    val difficulty: Float = 1f
 )
 
 object GameConfig {

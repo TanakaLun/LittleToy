@@ -1,2 +1,2 @@
 # LittleToy
-Vibe Coding
+Meaningless
