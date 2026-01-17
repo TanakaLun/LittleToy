@@ -1,4 +1,4 @@
-name: Build Toy APK
+name: Snake APK CI Build
 
 on:
   push:
@@ -129,7 +129,7 @@ jobs:
           echo "build_timestamp=$BUILD_TIMESTAMP" >> $GITHUB_OUTPUT
 
           ORIGINAL_APK_PATH=$(find ${{ github.workspace }}/app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
-          NEW_APK_NAME="Toy-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
+          NEW_APK_NAME="Snake-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
           
           # 重命名 APK 文件
           NEW_APK_DIR=$(dirname "$ORIGINAL_APK_PATH")
@@ -141,7 +141,7 @@ jobs:
       - name: 📤 Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Toy-debug-v${{ steps.version_info.outputs.version_code }}
+          name: Snake-debug-v${{ steps.version_info.outputs.version_code }}
           path: ${{ steps.build_info.outputs.apk_path }}
           retention-days: 7
 
@@ -259,7 +259,7 @@ jobs:
           echo "build_timestamp=$BUILD_TIMESTAMP" >> $GITHUB_OUTPUT
 
           ORIGINAL_APK_PATH=$(find ${{ github.workspace }}/app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
-          NEW_APK_NAME="Toy-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
+          NEW_APK_NAME="Snake-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
           
           # 重命名 APK 文件
           NEW_APK_DIR=$(dirname "$ORIGINAL_APK_PATH")
@@ -271,6 +271,6 @@ jobs:
       - name: 📤 Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Toy-release-v${{ steps.version_info.outputs.version_code }}
+          name: Snake-release-v${{ steps.version_info.outputs.version_code }}
           path: ${{ steps.build_info.outputs.apk_path }}
           retention-days: 7
