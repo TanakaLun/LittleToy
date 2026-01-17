@@ -21,11 +21,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import io.tl.snake.logic.* // 引入逻辑包
 import io.tl.snake.ui.theme.MyTheme
 import kotlinx.coroutines.delay
-import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -35,13 +36,12 @@ class MainActivity : ComponentActivity() {
                 var showSettings by remember { mutableStateOf(false) }
 
                 Scaffold(
-                    modifier = Modifier.fillMaxSize(),
                     topBar = {
-                        SmallTopAppBar(
-                            title = { Text("Snake MD3", style = MaterialTheme.typography.titleMedium) },
+                        CenterAlignedTopAppBar(
+                            title = { Text("Snake MD3", style = MaterialTheme.typography.titleLarge) },
                             actions = {
                                 IconButton(onClick = { showSettings = true }) {
-                                    Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                    Icon(Icons.Default.Settings, "Settings")
                                 }
                             }
                         )
@@ -49,12 +49,9 @@ class MainActivity : ComponentActivity() {
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         SnakeGameScreen(settings)
+                        
                         if (showSettings) {
-                            SettingsDialog(
-                                settings = settings,
-                                onDismiss = { showSettings = false },
-                                onSettingsChange = { settings = it }
-                            )
+                            SettingsDialog(settings, { showSettings = false }) { settings = it }
                         }
                     }
                 }
@@ -68,204 +65,140 @@ fun SnakeGameScreen(settings: GameSettings) {
     var state by remember { mutableStateOf(SnakeState()) }
     val colorScheme = MaterialTheme.colorScheme
 
-    // 游戏主循环
+    // 游戏循环：逻辑时钟
     LaunchedEffect(state.isGameOver, state.isPaused) {
         while (!state.isGameOver && !state.isPaused) {
-            val baseSpeed = (160 - (state.score / 50 * 10)).coerceAtLeast(70)
-            delay(baseSpeed.toLong())
+            val tickRate = (160 - (state.score / 50 * 10)).coerceAtLeast(80).toLong()
+            delay(tickRate)
             
-            // 处理无敌时间递减
+            // 无敌倒计时逻辑
             if (state.isInvincible) {
-                val nextTime = state.invincibleTimeLeft - baseSpeed
-                if (nextTime <= 0) {
-                    state = state.copy(isInvincible = false, invincibleTimeLeft = 0)
-                } else {
-                    state = state.copy(invincibleTimeLeft = nextTime)
-                }
+                val remain = state.invincibleTimeLeft - tickRate
+                state = if (remain <= 0) state.copy(isInvincible = false, invincibleTimeLeft = 0)
+                        else state.copy(invincibleTimeLeft = remain)
             }
-            state = gameTick(state)
+            
+            state = gameTick(state) // 调用 Logic 包中的纯逻辑函数
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        // 顶部信息栏
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-            ScoreDisplay("SCORE", state.score, colorScheme.primary)
-            // Buff 状态图标
-            Row {
-                if (state.hasShield) Icon(Icons.Default.Shield, "Shield", tint = Color(0xFF4CAF50))
-                if (state.isInvincible) Icon(Icons.Default.AutoAwesome, "Invincible", tint = Color(0xFFFFEB3B))
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // 记分与 Buff 状态栏
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            ScoreItem("SCORE", state.score, colorScheme.primary)
+            
+            // 动态 Buff 图标
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.hasShield) Icon(Icons.Default.Shield, null, tint = Color(0xFF4CAF50))
+                if (state.isInvincible) Icon(Icons.Default.Bolt, null, tint = Color(0xFFFFC107))
             }
+
             FilledTonalIconButton(onClick = { state = state.copy(isPaused = !state.isPaused) }) {
                 Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(Modifier.height(20.dp))
 
+        // 画布层
         Box(
             modifier = Modifier.weight(1f).aspectRatio(1f)
-                .background(colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.extraLarge)
-                .pointerInput(state.isPaused || state.isGameOver) {
-                    detectDragGestures { _, dragAmount ->
-                        state = handleDirectionChange(state, dragAmount.x, dragAmount.y)
+                .background(colorScheme.surfaceContainerHigh, MaterialTheme.shapes.extraLarge)
+                .pointerInput(state.isGameOver || state.isPaused) {
+                    if (!state.isGameOver && !state.isPaused) {
+                        detectDragGestures { _, dragAmount ->
+                            state = handleSwipe(state, dragAmount.x, dragAmount.y)
+                        }
                     }
                 }
         ) {
-            Canvas(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            Canvas(Modifier.fillMaxSize().padding(12.dp)) {
                 val cellSize = size.width / GameConfig.GRID_SIZE
 
-                // 1. 绘制方格辅助线
+                // 1. 辅助网格绘制
                 if (settings.showGrid) {
                     for (i in 0..GameConfig.GRID_SIZE) {
-                        val pos = i * cellSize
-                        drawLine(colorScheme.outlineVariant, Offset(pos, 0f), Offset(pos, size.height), 1f)
-                        drawLine(colorScheme.outlineVariant, Offset(0f, pos), Offset(size.width, pos), 1f)
+                        drawLine(colorScheme.outlineVariant, Offset(i * cellSize, 0f), Offset(i * cellSize, size.height), 0.5.dp.toPx())
+                        drawLine(colorScheme.outlineVariant, Offset(0f, i * cellSize), Offset(size.width, i * cellSize), 0.5.dp.toPx())
                     }
                 }
 
-                // 2. 绘制食物与奖励
+                // 2. 绘制物品
                 drawCircle(colorScheme.tertiary, cellSize / 3, Offset(state.food.first * cellSize + cellSize / 2, state.food.second * cellSize + cellSize / 2))
-                state.specialItem?.let {
-                    val itemColor = if (it.type == ItemType.SHIELD) Color(0xFF4CAF50) else Color(0xFF2196F3)
-                    drawRect(itemColor, Offset(it.pos.first * cellSize + 4f, it.pos.second * cellSize + 4f), Size(cellSize - 8f, cellSize - 8f))
+                state.specialItem?.let { 
+                    drawRect(Color(0xFF4CAF50), Offset(it.pos.first * cellSize + 6f, it.pos.second * cellSize + 6f), Size(cellSize - 12f, cellSize - 12f))
                 }
 
-                // 3. 绘制蛇
-                state.snake.forEachIndexed { index, segment ->
-                    val alpha = if (state.isInvincible) 0.5f else 1.0f
+                // 3. 绘制蛇（带无敌透明效果）
+                state.snake.forEachIndexed { index, pos ->
+                    val alpha = if (state.isInvincible) 0.5f else 1f
                     drawRoundRect(
                         color = if (index == 0) colorScheme.primary else colorScheme.primaryContainer.copy(alpha = alpha),
-                        topLeft = Offset(segment.first * cellSize + 2f, segment.second * cellSize + 2f),
+                        topLeft = Offset(pos.first * cellSize + 2f, pos.second * cellSize + 2f),
                         size = Size(cellSize - 4f, cellSize - 4f),
                         cornerRadius = CornerRadius(6.dp.toPx())
                     )
                 }
             }
 
-            // 覆盖层 (暂停/结束)
+            // 暂停/结束 弹窗
             androidx.compose.animation.AnimatedVisibility(
                 visible = state.isPaused || state.isGameOver,
-                enter = fadeIn(), exit = fadeOut(),
-                modifier = Modifier.align(Alignment.Center)
+                enter = fadeIn() + scaleIn(), exit = fadeOut()
             ) {
-                GameOverlay(state, onRestart = { state = SnakeState() }, onResume = { state = state.copy(isPaused = false) })
+                ControlOverlay(state, onResume = { state = state.copy(isPaused = false) }, onRestart = { state = SnakeState() })
             }
         }
     }
 }
 
-// --- 逻辑函数 ---
-
-fun gameTick(state: SnakeState): SnakeState {
-    val head = state.snake.first()
-    val newHead = when (state.direction) {
-        Direction.UP -> head.first to (head.second - 1)
-        Direction.DOWN -> head.first to (head.second + 1)
-        Direction.LEFT -> head.first - 1 to head.second
-        Direction.RIGHT -> head.first + 1 to head.second
-    }
-
-    // 碰撞检测逻辑
-    val hitWall = newHead.first !in 0 until GameConfig.GRID_SIZE || newHead.second !in 0 until GameConfig.GRID_SIZE
-    val hitSelf = state.snake.contains(newHead) && !state.isInvincible
-
-    if (hitWall || hitSelf) {
-        return if (state.hasShield) {
-            // 触发免死：回到中心，开启无敌
-            state.copy(
-                snake = listOf(10 to 10, 10 to 11, 10 to 12),
-                direction = Direction.UP,
-                hasShield = false,
-                isInvincible = true,
-                invincibleTimeLeft = 5000
-            )
-        } else {
-            state.copy(isGameOver = true)
-        }
-    }
-
-    val newSnake = mutableListOf(newHead) + state.snake
-    var score = state.score
-    var hasShield = state.hasShield
-    var specialItem = state.specialItem
-    var isInvincible = state.isInvincible
-    var invincibleTime = state.invincibleTimeLeft
-
-    // 检查食物
-    val finalSnake = if (newHead == state.food) {
-        score += 10
-        // 概率生成特殊物品 (15% 几率)
-        if (Random.nextFloat() < 0.15f && specialItem == null) {
-            specialItem = SpecialItem(Random.nextInt(20) to Random.nextInt(20), ItemType.SHIELD)
-        }
-        newSnake
-    } else {
-        newSnake.dropLast(1)
-    }
-
-    // 检查特殊物品
-    if (newHead == specialItem?.pos) {
-        if (specialItem?.type == ItemType.SHIELD) hasShield = true
-        specialItem = null
-        score += 50
-    }
-
-    return state.copy(snake = finalSnake, score = score, food = if (newHead == state.food) Random.nextInt(20) to Random.nextInt(20) else state.food, specialItem = specialItem, hasShield = hasShield)
-}
+// --- 辅助 UI 组件 ---
 
 @Composable
-fun GameOverlay(state: SnakeState, onRestart: () -> Unit, onResume: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceBright)) {
-        Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(if (state.isGameOver) "GAME OVER" else "PAUSED", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(16.dp))
-            if (!state.isGameOver) {
-                Button(onClick = onResume, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.PlayArrow, null)
-                    Text("Continue")
+fun ControlOverlay(state: SnakeState, onResume: () -> Unit, onRestart: () -> Unit) {
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
+        Surface(shape = MaterialTheme.shapes.large, tonalElevation = 6.dp) {
+            Column(Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(if (state.isGameOver) "GAME OVER" else "PAUSED", style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(24.dp))
+                if (!state.isGameOver) {
+                    Button(onClick = onResume, Modifier.fillMaxWidth()) { Text("Continue Game") }
+                    Spacer(Modifier.height(8.dp))
                 }
-                Spacer(Modifier.height(8.dp))
-            }
-            OutlinedButton(onClick = onRestart, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Refresh, null)
-                Text("Restart")
+                OutlinedButton(onClick = onRestart, Modifier.fillMaxWidth()) { Text("Restart") }
             }
         }
     }
 }
 
 @Composable
-fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onSettingsChange: (GameSettings) -> Unit) {
+fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-        title = { Text("Settings") },
+        title = { Text("Game Settings") },
         text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Show Grid Lines")
-                    Spacer(Modifier.weight(1f))
-                    Switch(checked = settings.showGrid, onCheckedChange = { onSettingsChange(settings.copy(showGrid = it)) })
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Show Grid Lines")
+                Spacer(Modifier.weight(1f))
+                Switch(checked = settings.showGrid, onCheckedChange = { onUpdate(settings.copy(showGrid = it)) })
             }
-        }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
 }
 
-// 辅助 UI 组件 (复用之前的)
 @Composable
-fun ScoreDisplay(label: String, value: Int, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(alpha = 0.7f))
-        Text("$value", style = MaterialTheme.typography.titleLarge, color = color)
+fun ScoreItem(label: String, value: Int, color: Color) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(alpha = 0.6f))
+        Text("$value", style = MaterialTheme.typography.headlineSmall, color = color)
     }
 }
 
-fun handleDirectionChange(current: SnakeState, x: Float, y: Float): SnakeState {
+fun handleSwipe(state: SnakeState, x: Float, y: Float): SnakeState {
     val newDir = when {
-        kotlin.math.abs(x) > kotlin.math.abs(y) -> if (x > 0 && current.direction != Direction.LEFT) Direction.RIGHT else if (x < 0 && current.direction != Direction.RIGHT) Direction.LEFT else current.direction
-        else -> if (y > 0 && current.direction != Direction.UP) Direction.DOWN else if (y < 0 && current.direction != Direction.DOWN) Direction.UP else current.direction
+        Math.abs(x) > Math.abs(y) -> if (x > 0 && state.direction != Direction.LEFT) Direction.RIGHT else if (x < 0 && state.direction != Direction.RIGHT) Direction.LEFT else state.direction
+        else -> if (y > 0 && state.direction != Direction.UP) Direction.DOWN else if (y < 0 && state.direction != Direction.DOWN) Direction.UP else state.direction
     }
-    return current.copy(direction = newDir)
+    return state.copy(direction = newDir)
 }
