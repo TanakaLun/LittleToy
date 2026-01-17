@@ -77,16 +77,16 @@ jobs:
       
       - name: 🛠️ Modify Gradle Build File
         run: |
-          # 查找并修改 build.gradle
-          GRADLE_FILE="app/build.gradle"
+          # 查找并修改 build.gradle.kts
+          GRADLE_FILE="app/build.gradle.kts"
           
           echo "Found gradle file: $GRADLE_FILE"
             
           # 备份原始文件
           cp "$GRADLE_FILE" "${GRADLE_FILE}.bak"
 
-          sed -i -E "s/versionCode[[:space:]]+[0-9]+/versionCode ${{ steps.version_info.outputs.version_code }}/g" "$GRADLE_FILE"
-          sed -i -E "s/versionName[[:space:]]+'[^']*'/versionName '${{ steps.version_info.outputs.version_name }}'/g" "$GRADLE_FILE"
+          sed -i -E "s/versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"/versionName = \"${{ steps.version_info.outputs.version_name }}\"/g" "$GRADLE_FILE"
+          sed -i -E "s/versionName[[:space:]]+\"[^\"]*\"/versionName \"${{ steps.version_info.outputs.version_name }}\"/g" "$GRADLE_FILE"
             
           echo "Modified versionCode to: ${{ steps.version_info.outputs.version_code }}"
           echo "Modified versionName to: ${{ steps.version_info.outputs.version_name }}"
@@ -181,16 +181,16 @@ jobs:
       
       - name: 🛠️ Modify Gradle Build File
         run: |
-          # 查找并修改 build.gradle
-          GRADLE_FILE="app/build.gradle"
+          # 查找并修改 build.gradle.kts
+          GRADLE_FILE="app/build.gradle.kts"
           
           echo "Found gradle file: $GRADLE_FILE"
             
           # 备份原始文件
           cp "$GRADLE_FILE" "${GRADLE_FILE}.bak"
             
-          sed -i -E "s/versionCode[[:space:]]+[0-9]+/versionCode ${{ steps.version_info.outputs.version_code }}/g" "$GRADLE_FILE"
-          sed -i -E "s/versionName[[:space:]]+'[^']*'/versionName '${{ steps.version_info.outputs.version_name }}'/g" "$GRADLE_FILE"
+          sed -i -E "s/versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"/versionName = \"${{ steps.version_info.outputs.version_name }}\"/g" "$GRADLE_FILE"
+          sed -i -E "s/versionName[[:space:]]+\"[^\"]*\"/versionName \"${{ steps.version_info.outputs.version_name }}\"/g" "$GRADLE_FILE"
             
           echo "Modified versionCode to: ${{ steps.version_info.outputs.version_code }}"
           echo "Modified versionName to: ${{ steps.version_info.outputs.version_name }}"
