@@ -1,5 +1,6 @@
 package io.tl.snake
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -7,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -20,8 +22,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import io.tl.snake.logic.* // 引入逻辑包
+import io.tl.snake.logic.*
 import io.tl.snake.ui.theme.MyTheme
 import kotlinx.coroutines.delay
 
@@ -29,29 +32,50 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val prefs = getSharedPreferences("snake_prefs", Context.MODE_PRIVATE)
+        
         enableEdgeToEdge()
         setContent {
             MyTheme {
                 var settings by remember { mutableStateOf(GameSettings()) }
                 var showSettings by remember { mutableStateOf(false) }
+                // 从持久化读取最高分
+                var highScore by remember { mutableIntStateOf(prefs.getInt("high_score", 0)) }
+                
+                var gameState by remember { mutableStateOf(SnakeState(highScore = highScore)) }
+
+                // 监听最高分变化并保存
+                LaunchedEffect(gameState.score) {
+                    if (gameState.score > highScore) {
+                        highScore = gameState.score
+                        prefs.edit().putInt("high_score", highScore).apply()
+                    }
+                }
 
                 Scaffold(
                     topBar = {
                         CenterAlignedTopAppBar(
-                            title = { Text("Snake MD3", style = MaterialTheme.typography.titleLarge) },
+                            title = { Text("SNAKE EVO") },
                             actions = {
-                                IconButton(onClick = { showSettings = true }) {
-                                    Icon(Icons.Default.Settings, "Settings")
+                                IconButton(onClick = { 
+                                    showSettings = true
+                                    gameState = gameState.copy(isPaused = true) // 调出设置自动暂停
+                                }) {
+                                    Icon(Icons.Default.Settings, null)
                                 }
                             }
                         )
                     }
                 ) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding)) {
-                        SnakeGameScreen(settings)
+                    Box(Modifier.padding(innerPadding)) {
+                        GameScreen(gameState, settings, { gameState = it })
                         
                         if (showSettings) {
-                            SettingsDialog(settings, { showSettings = false }) { settings = it }
+                            SettingsDialog(
+                                settings = settings,
+                                onDismiss = { showSettings = false },
+                                onUpdate = { settings = it }
+                            )
                         }
                     }
                 }
@@ -61,111 +85,75 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun SnakeGameScreen(settings: GameSettings) {
-    var state by remember { mutableStateOf(SnakeState()) }
+fun GameScreen(state: SnakeState, settings: GameSettings, onStateChange: (SnakeState) -> Unit) {
     val colorScheme = MaterialTheme.colorScheme
 
-    // 游戏循环：逻辑时钟
-    LaunchedEffect(state.isGameOver, state.isPaused) {
-        while (!state.isGameOver && !state.isPaused) {
-            val tickRate = (160 - (state.score / 50 * 10)).coerceAtLeast(80).toLong()
-            delay(tickRate)
-            
-            // 无敌倒计时逻辑
+    LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
+        while (!state.isGameOver && !state.isPaused && state.isStarted) {
+            delay(120)
+            var nextState = gameTick(state, settings)
             if (state.isInvincible) {
-                val remain = state.invincibleTimeLeft - tickRate
-                state = if (remain <= 0) state.copy(isInvincible = false, invincibleTimeLeft = 0)
-                        else state.copy(invincibleTimeLeft = remain)
+                val remain = state.invincibleTimeLeft - 120
+                nextState = if (remain <= 0) nextState.copy(isInvincible = false) 
+                            else nextState.copy(invincibleTimeLeft = remain)
             }
-            
-            state = gameTick(state) // 调用 Logic 包中的纯逻辑函数
+            onStateChange(nextState)
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        // 记分与 Buff 状态栏
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            ScoreItem("SCORE", state.score, colorScheme.primary)
-            
-            // 动态 Buff 图标
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (state.hasShield) Icon(Icons.Default.Shield, null, tint = Color(0xFF4CAF50))
-                if (state.isInvincible) Icon(Icons.Default.Bolt, null, tint = Color(0xFFFFC107))
-            }
-
-            FilledTonalIconButton(onClick = { state = state.copy(isPaused = !state.isPaused) }) {
-                Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
-            }
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            ScoreBoard("HIGH SCORE", state.highScore, colorScheme.secondary)
+            ScoreBoard("SCORE", state.score, colorScheme.primary)
         }
+        
+        Spacer(Modifier.height(16.dp))
 
-        Spacer(Modifier.height(20.dp))
-
-        // 画布层
         Box(
-            modifier = Modifier.weight(1f).aspectRatio(1f)
-                .background(colorScheme.surfaceContainerHigh, MaterialTheme.shapes.extraLarge)
-                .pointerInput(state.isGameOver || state.isPaused) {
-                    if (!state.isGameOver && !state.isPaused) {
-                        detectDragGestures { _, dragAmount ->
-                            state = handleSwipe(state, dragAmount.x, dragAmount.y)
-                        }
+            Modifier.weight(1f).aspectRatio(1f)
+                .background(colorScheme.surfaceVariant, MaterialTheme.shapes.extraLarge)
+                .pointerInput(Unit) {
+                    detectDragGestures { _, dragAmount ->
+                        onStateChange(handleSwipe(state, dragAmount.x, dragAmount.y))
                     }
-                }
+                },
+            contentAlignment = Alignment.Center
         ) {
             Canvas(Modifier.fillMaxSize().padding(12.dp)) {
                 val cellSize = size.width / GameConfig.GRID_SIZE
-
-                // 1. 辅助网格绘制
                 if (settings.showGrid) {
                     for (i in 0..GameConfig.GRID_SIZE) {
-                        drawLine(colorScheme.outlineVariant, Offset(i * cellSize, 0f), Offset(i * cellSize, size.height), 0.5.dp.toPx())
-                        drawLine(colorScheme.outlineVariant, Offset(0f, i * cellSize), Offset(size.width, i * cellSize), 0.5.dp.toPx())
+                        drawLine(colorScheme.onSurfaceVariant.copy(0.1f), Offset(i * cellSize, 0f), Offset(i * cellSize, size.height))
+                        drawLine(colorScheme.onSurfaceVariant.copy(0.1f), Offset(0f, i * cellSize), Offset(size.width, i * cellSize))
                     }
                 }
-
-                // 2. 绘制物品
-                drawCircle(colorScheme.tertiary, cellSize / 3, Offset(state.food.first * cellSize + cellSize / 2, state.food.second * cellSize + cellSize / 2))
-                state.specialItem?.let { 
-                    drawRect(Color(0xFF4CAF50), Offset(it.pos.first * cellSize + 6f, it.pos.second * cellSize + 6f), Size(cellSize - 12f, cellSize - 12f))
-                }
-
-                // 3. 绘制蛇（带无敌透明效果）
-                state.snake.forEachIndexed { index, pos ->
-                    val alpha = if (state.isInvincible) 0.5f else 1f
-                    drawRoundRect(
-                        color = if (index == 0) colorScheme.primary else colorScheme.primaryContainer.copy(alpha = alpha),
-                        topLeft = Offset(pos.first * cellSize + 2f, pos.second * cellSize + 2f),
-                        size = Size(cellSize - 4f, cellSize - 4f),
-                        cornerRadius = CornerRadius(6.dp.toPx())
-                    )
+                // 绘制逻辑
+                drawCircle(colorScheme.error, cellSize/3, Offset(state.food.first*cellSize + cellSize/2, state.food.second*cellSize + cellSize/2))
+                state.snake.forEach { (x, y) ->
+                    drawRoundRect(colorScheme.primary, Offset(x*cellSize+2f, y*cellSize+2f), Size(cellSize-4f, cellSize-4f), CornerRadius(4.dp.toPx()))
                 }
             }
 
-            // 暂停/结束 弹窗
-            androidx.compose.animation.AnimatedVisibility(
-                visible = state.isPaused || state.isGameOver,
-                enter = fadeIn() + scaleIn(), exit = fadeOut()
-            ) {
-                ControlOverlay(state, onResume = { state = state.copy(isPaused = false) }, onRestart = { state = SnakeState() })
-            }
-        }
-    }
-}
-
-// --- 辅助 UI 组件 ---
-
-@Composable
-fun ControlOverlay(state: SnakeState, onResume: () -> Unit, onRestart: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
-        Surface(shape = MaterialTheme.shapes.large, tonalElevation = 6.dp) {
-            Column(Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (state.isGameOver) "GAME OVER" else "PAUSED", style = MaterialTheme.typography.headlineSmall)
-                Spacer(Modifier.height(24.dp))
-                if (!state.isGameOver) {
-                    Button(onClick = onResume, Modifier.fillMaxWidth()) { Text("Continue Game") }
-                    Spacer(Modifier.height(8.dp))
+            // 起始控件
+            if (!state.isStarted) {
+                Button(onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) }) {
+                    Icon(Icons.Default.PlayArrow, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("START GAME")
                 }
-                OutlinedButton(onClick = onRestart, Modifier.fillMaxWidth()) { Text("Restart") }
+            }
+            
+            if (state.isPaused && state.isStarted && !state.isGameOver) {
+                TextButton(onClick = { onStateChange(state.copy(isPaused = false)) }) {
+                    Text("RESUME", style = MaterialTheme.typography.headlineMedium)
+                }
+            }
+            
+            if (state.isGameOver) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("GAME OVER", style = MaterialTheme.typography.headlineMedium, color = colorScheme.error)
+                    Button(onClick = { onStateChange(SnakeState(highScore = state.highScore)) }) { Text("TRY AGAIN") }
+                }
             }
         }
     }
@@ -173,25 +161,57 @@ fun ControlOverlay(state: SnakeState, onResume: () -> Unit, onRestart: () -> Uni
 
 @Composable
 fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
+    var clickCount by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Game Settings") },
+        title = { Text("Settings") },
         text = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Show Grid Lines")
-                Spacer(Modifier.weight(1f))
-                Switch(checked = settings.showGrid, onCheckedChange = { onUpdate(settings.copy(showGrid = it)) })
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ToggleRow("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
+                
+                if (settings.isDeveloperMode) {
+                    Divider()
+                    Text("Developer Options", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    ToggleRow("Loop Mode (Wall-less)", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
+                }
+                
+                Spacer(Modifier.height(8.dp))
+                
+                // 版本号 Chip 与 开发者模式激活，向Google系App看齐😶‍🌫️
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    AssistChip(
+                        onClick = { 
+                            clickCount++
+                            if (clickCount >= 7 && !settings.isDeveloperMode) {
+                                onUpdate(settings.copy(isDeveloperMode = true))
+                            }
+                        },
+                        label = { Text("Version ${GameConfig.VERSION}") },
+                        leadingIcon = { if(settings.isDeveloperMode) Icon(Icons.Default.Code, null, Modifier.size(16.dp)) }
+                    )
+                }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text("CLOSE") } }
     )
 }
 
 @Composable
-fun ScoreItem(label: String, value: Int, color: Color) {
-    Column {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(alpha = 0.6f))
-        Text("$value", style = MaterialTheme.typography.headlineSmall, color = color)
+fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label)
+        Spacer(Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+fun ScoreBoard(label: String, score: Int, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(0.6f))
+        Text("$score", style = MaterialTheme.typography.titleLarge, color = color)
     }
 }
 

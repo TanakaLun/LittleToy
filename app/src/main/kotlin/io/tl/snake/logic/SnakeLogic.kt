@@ -2,12 +2,11 @@ package io.tl.snake.logic
 
 import kotlin.random.Random
 
-// 核心配置
 object GameConfig {
     const val GRID_SIZE = 20
+    const val VERSION = "1.2.4" // 版本号
 }
 
-// 数据模型
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 enum class ItemType { FOOD, SHIELD }
 
@@ -19,83 +18,91 @@ data class SnakeState(
     val specialItem: SpecialItem? = null,
     val direction: Direction = Direction.UP,
     val isGameOver: Boolean = false,
-    val isPaused: Boolean = false,
+    val isPaused: Boolean = true, // 初始设为暂停（等待开始）
+    val isStarted: Boolean = false, // 标记游戏是否真正开始
     val score: Int = 0,
+    val highScore: Int = 0, // 历史最高分
     val hasShield: Boolean = false,
     val isInvincible: Boolean = false,
     val invincibleTimeLeft: Long = 0
 )
 
 data class GameSettings(
-    val showGrid: Boolean = true
+    val showGrid: Boolean = true,
+    val isDeveloperMode: Boolean = false,
+    val isLoopMode: Boolean = false // 轮回模式
 )
 
-// 纯逻辑函数：计算每一帧的状态变化
-fun gameTick(state: SnakeState): SnakeState {
-    if (state.isGameOver || state.isPaused) return state
+fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
+    if (state.isGameOver || state.isPaused || !state.isStarted) return state
 
     val head = state.snake.first()
-    val newHead = when (state.direction) {
-        Direction.UP -> head.first to (head.second - 1)
-        Direction.DOWN -> head.first to (head.second + 1)
-        Direction.LEFT -> head.first - 1 to head.second
-        Direction.RIGHT -> head.first + 1 to head.second
+    var nextX = when (state.direction) {
+        Direction.LEFT -> head.first - 1
+        Direction.RIGHT -> head.first + 1
+        else -> head.first
+    }
+    var nextY = when (state.direction) {
+        Direction.UP -> head.second - 1
+        Direction.DOWN -> head.second + 1
+        else -> head.second
     }
 
-    // 碰撞检测
-    val hitWall = newHead.first !in 0 until GameConfig.GRID_SIZE || 
-                  newHead.second !in 0 until GameConfig.GRID_SIZE
-    val hitSelf = state.snake.contains(newHead) && !state.isInvincible
-
-    if (hitWall || hitSelf) {
-        return if (state.hasShield) {
-            // 触发免死：回到中心，开启5秒无敌
-            state.copy(
-                snake = listOf(10 to 10, 10 to 11, 10 to 12),
-                direction = Direction.UP,
-                hasShield = false,
-                isInvincible = true,
-                invincibleTimeLeft = 5000L
-            )
+    // 碰撞检测与轮回逻辑
+    val isOut = nextX !in 0 until GameConfig.GRID_SIZE || nextY !in 0 until GameConfig.GRID_SIZE
+    
+    if (isOut) {
+        if (settings.isLoopMode) {
+            // 轮回模式：从另一侧穿出
+            nextX = (nextX + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
+            nextY = (nextY + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
+        } else if (!state.hasShield) {
+            return state.copy(isGameOver = true)
         } else {
-            state.copy(isGameOver = true)
+            return triggerShield(state)
         }
     }
 
+    val newHead = nextX to nextY
+    val hitSelf = state.snake.contains(newHead) && !state.isInvincible
+    
+    if (hitSelf) {
+        return if (state.hasShield) triggerShield(state) else state.copy(isGameOver = true)
+    }
+
+    // 移动与进食逻辑
     val newSnake = mutableListOf(newHead) + state.snake
     var currentScore = state.score
-    var currentHasShield = state.hasShield
-    var currentSpecialItem = state.specialItem
     var currentFood = state.food
+    var currentItem = state.specialItem
+    var currentShield = state.hasShield
 
-    // 逻辑：吃到普通食物
-    val finalSnake = if (newHead == state.food) {
+    if (newHead == state.food) {
         currentScore += 10
         currentFood = Random.nextInt(GameConfig.GRID_SIZE) to Random.nextInt(GameConfig.GRID_SIZE)
-        // 15% 几率生成免死金牌
-        if (Random.nextFloat() < 0.15f && currentSpecialItem == null) {
-            currentSpecialItem = SpecialItem(
-                Random.nextInt(GameConfig.GRID_SIZE) to Random.nextInt(GameConfig.GRID_SIZE),
-                ItemType.SHIELD
-            )
+        if (Random.nextFloat() < 0.1f && currentItem == null) {
+            currentItem = SpecialItem(Random.nextInt(GameConfig.GRID_SIZE) to Random.nextInt(GameConfig.GRID_SIZE), ItemType.SHIELD)
         }
-        newSnake
     } else {
-        newSnake.dropLast(1)
+        newSnake.removeAt(newSnake.size - 1)
     }
 
-    // 逻辑：吃到奖励物品
-    if (newHead == currentSpecialItem?.pos) {
-        if (currentSpecialItem?.type == ItemType.SHIELD) currentHasShield = true
-        currentSpecialItem = null
+    if (newHead == currentItem?.pos) {
+        currentShield = true
+        currentItem = null
         currentScore += 50
     }
 
     return state.copy(
-        snake = finalSnake,
-        food = currentFood,
-        score = currentScore,
-        specialItem = currentSpecialItem,
-        hasShield = currentHasShield
+        snake = newSnake, food = currentFood, score = currentScore,
+        specialItem = currentItem, hasShield = currentShield
     )
 }
+
+private fun triggerShield(state: SnakeState) = state.copy(
+    snake = listOf(10 to 10, 10 to 11, 10 to 12),
+    direction = Direction.UP,
+    hasShield = false,
+    isInvincible = true,
+    invincibleTimeLeft = 5000L
+)
