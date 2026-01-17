@@ -82,80 +82,195 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun GameContent(state: SnakeState, onStateChange: (SnakeState) -> Unit) {
-    // 这里不再需要重复传入 settings，为了保持代码整洁，你可以通过 CompositionLocal 或直接传递
-    // 这里为了演示修复，假设逻辑已经处理了 settings (或在外部调用)
-    // 实际使用时，请确保 gameTick 能够获取到当前的 settings
-    
-    // 假设我们通过全局变量或 remember 记录 settings (简化处理)
-    val settings = remember { GameSettings() } 
+fun GameContent(
+    state: SnakeState,
+    settings: GameSettings,
+    onStateChange: (SnakeState) -> Unit
+) {
     val colorScheme = MaterialTheme.colorScheme
-
+    
+    // --- 1. 游戏主循环 (时钟) ---
     LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
         while (!state.isGameOver && !state.isPaused && state.isStarted) {
-            delay(120L)
+            // 动态速度：每得50分提速一次
+            val tickRate = (150 - (state.score / 50 * 10)).coerceAtLeast(80).toLong()
+            delay(tickRate)
+            
             var next = gameTick(state, settings)
+            
+            // 处理无敌时间衰减
             if (state.isInvincible) {
-                val remain = state.invincibleTimeLeft - 120
-                next = if (remain <= 0) next.copy(isInvincible = false) else next.copy(invincibleTimeLeft = remain)
+                val remain = state.invincibleTimeLeft - tickRate
+                next = if (remain <= 0) next.copy(isInvincible = false) 
+                       else next.copy(invincibleTimeLeft = remain)
             }
             onStateChange(next)
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    // --- 2. 视觉动画配置 ---
+    // 食物呼吸效果动画
+    val infiniteTransition = rememberInfiniteTransition(label = "foodScale")
+    val foodPulse by infiniteTransition.animateFloat(
+        initialValue = 0.8f,
+        targetValue = 1.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "pulse"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 分数展示栏
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             ScoreColumn("HIGH SCORE", state.highScore, colorScheme.secondary)
+            
+            // 状态图标指示器
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.hasShield) Icon(Icons.Default.Shield, "Shield", tint = Color(0xFF4CAF50))
+                if (state.isInvincible) Icon(Icons.Default.Bolt, "Invincible", tint = Color(0xFFFFC107))
+            }
+            
             ScoreColumn("SCORE", state.score, colorScheme.primary)
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
+        // --- 3. 游戏画布区 ---
         Box(
-            Modifier.weight(1f).aspectRatio(1f)
+            modifier = Modifier
+                .weight(1f)
+                .aspectRatio(1f)
                 .background(colorScheme.surfaceContainerHigh, MaterialTheme.shapes.extraLarge)
-                .pointerInput(Unit) {
-                    detectDragGestures { _, dragAmount ->
-                        onStateChange(handleSwipe(state, dragAmount.x, dragAmount.y))
+                // 手势监听
+                .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
+                    if (state.isStarted && !state.isPaused && !state.isGameOver) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onStateChange(handleSwipe(state, dragAmount.x, dragAmount.y))
+                        }
                     }
                 },
             contentAlignment = Alignment.Center
         ) {
-            Canvas(Modifier.fillMaxSize().padding(12.dp)) {
+            Canvas(modifier = Modifier.fillMaxSize().padding(12.dp)) {
                 val cellSize = size.width / GameConfig.GRID_SIZE
-                // 绘制蛇
-                state.snake.forEachIndexed { i, p ->
-                    drawRoundRect(
-                        if(i==0) colorScheme.primary else colorScheme.primaryContainer.copy(if(state.isInvincible) 0.5f else 1f),
-                        Offset(p.first*cellSize+2f, p.second*cellSize+2f),
-                        Size(cellSize-4f, cellSize-4f), CornerRadius(4.dp.toPx())
+
+                // A. 绘制背景网格
+                if (settings.showGrid) {
+                    for (i in 0..GameConfig.GRID_SIZE) {
+                        val pos = i * cellSize
+                        drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(pos, 0f), Offset(pos, size.height), 0.5.dp.toPx())
+                        drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(0f, pos), Offset(size.width, pos), 0.5.dp.toPx())
+                    }
+                }
+
+                // B. 绘制特殊物品 (如果有)
+                state.specialItem?.let { item ->
+                    drawRect(
+                        color = Color(0xFF4CAF50),
+                        topLeft = Offset(item.pos.first * cellSize + 4f, item.pos.second * cellSize + 4f),
+                        size = Size(cellSize - 8f, cellSize - 8f)
                     )
                 }
-                // 绘制食物
-                drawCircle(colorScheme.tertiary, cellSize/3f, Offset(state.food.first*cellSize+cellSize/2, state.food.second*cellSize+cellSize/2))
+
+                // C. 绘制食物 (带脉冲动画)
+                drawCircle(
+                    color = colorScheme.tertiary,
+                    radius = (cellSize / 3f) * foodPulse,
+                    center = Offset(state.food.first * cellSize + cellSize / 2, state.food.second * cellSize + cellSize / 2)
+                )
+
+                // D. 绘制蛇身
+                state.snake.forEachIndexed { index, p ->
+                    val isHead = index == 0
+                    val alpha = if (state.isInvincible && (state.invincibleTimeLeft / 200 % 2 == 0L)) 0.3f else 1f
+                    
+                    drawRoundRect(
+                        color = if (isHead) colorScheme.primary else colorScheme.primaryContainer.copy(alpha = alpha),
+                        topLeft = Offset(p.first * cellSize + 1.5f, p.second * cellSize + 1.5f),
+                        size = Size(cellSize - 3f, cellSize - 3f),
+                        cornerRadius = CornerRadius(if (isHead) 8.dp.toPx() else 4.dp.toPx())
+                    )
+                }
             }
 
+            // --- 4. 覆盖层逻辑 ---
+            
+            // 游戏未开始
             if (!state.isStarted) {
-                Surface(color = colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium, 
-                    modifier = Modifier.clickable { onStateChange(state.copy(isStarted = true, isPaused = false)) }) {
-                    Text("TAP TO START", Modifier.padding(16.dp))
-                }
+                StartGameButton { onStateChange(state.copy(isStarted = true, isPaused = false)) }
             }
 
-            if (state.isPaused || state.isGameOver) {
-                OverlayCard(state) { 
-                    onStateChange(if(state.isGameOver) SnakeState(highScore = state.highScore, isStarted = true) else state.copy(isPaused = false)) 
+            // 暂停或结束状态
+            androidx.compose.animation.AnimatedVisibility(
+                visible = (state.isPaused || state.isGameOver) && state.isStarted,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut()
+            ) {
+                OverlayCard(state) {
+                    if (state.isGameOver) {
+                        onStateChange(SnakeState(highScore = state.highScore, isStarted = true))
+                    } else {
+                        onStateChange(state.copy(isPaused = false))
+                    }
                 }
+            }
+        }
+        
+        Text(
+            text = if(settings.isLoopMode) "Loop Mode Active" else "Classic Mode",
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 12.dp),
+            color = colorScheme.onSurfaceVariant.copy(0.5f)
+        )
+    }
+}
+
+@Composable
+fun StartGameButton(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        color = MaterialTheme.colorScheme.primary,
+        shape = CircleShape,
+        tonalElevation = 8.dp,
+        modifier = Modifier.size(120.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(40.dp))
+                Text("START", style = MaterialTheme.typography.labelLarge)
             }
         }
     }
 }
 
 @Composable
-fun ScoreColumn(l: String, v: Int, c: Color) {
+fun ScoreColumn(label: String, score: Int, color: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(l, style = MaterialTheme.typography.labelSmall, color = c.copy(0.6f))
-        Text("$v", style = MaterialTheme.typography.titleLarge, color = c)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(alpha = 0.6f))
+        androidx.compose.animation.AnimatedContent(
+            targetState = score,
+            transitionSpec = {
+                (slideInVertically { it } + fadeIn()) togetherWith (slideOutVertically { -it } + fadeOut())
+            }, label = "scoreAnim"
+        ) { targetValue ->
+            Text(
+                text = targetValue.toString(),
+                style = MaterialTheme.typography.titleLarge,
+                color = color,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
