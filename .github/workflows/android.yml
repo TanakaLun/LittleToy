@@ -26,7 +26,7 @@ permissions:
 jobs:
   build-debug:
     runs-on: ubuntu-latest
-    if: github.event.inputs.build_all == 'both' || github.event.inputs.build_all == 'debug'
+    if: github.event_name == 'push' || github.event.inputs.build_all == 'both' || github.event.inputs.build_all == 'debug'
     outputs:
       build_timestamp: ${{ steps.build_info.outputs.build_timestamp }}
     env:

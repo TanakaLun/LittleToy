@@ -153,7 +153,6 @@ fun GameContent(
                     for (i in 0..GameConfig.GRID_SIZE) {
                         val pos = i * cellSize
                         drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(pos, 0f), Offset(pos, size.height), 1f)
-                        drawLine(colorScheme.outlineVariant.copy(0f, pos), Offset(size.width, pos), 1f) // 修正：应为 horizontal line
                         drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(0f, pos), Offset(size.width, pos), 1f)
                     }
                 }
