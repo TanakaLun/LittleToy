@@ -4,7 +4,7 @@ import kotlin.random.Random
 
 object GameConfig {
     const val GRID_SIZE = 20
-    const val VERSION = "1.3.2"
+    const val VERSION = "1.3.3"
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
