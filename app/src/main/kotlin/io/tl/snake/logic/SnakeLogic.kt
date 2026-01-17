@@ -4,7 +4,7 @@ import kotlin.random.Random
 
 object GameConfig {
     const val GRID_SIZE = 20
-    const val VERSION = "1.3.0"
+    const val VERSION = "1.3.1"
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
@@ -19,8 +19,9 @@ data class SnakeState(
     val direction: Direction = Direction.UP,
     val isGameOver: Boolean = false,
     val isPaused: Boolean = false,
-    val isStarted: Boolean = false, // 是否已经点击“开始”
-    val score: Int = 0,
+    val isStarted: Boolean = false,
+    val score: Int = 0, // 当前得分
+    val highScore: Int = 0, // 最高分
     val hasShield: Boolean = false,
     val isInvincible: Boolean = false,
     val invincibleTimeLeft: Long = 0
@@ -47,28 +48,22 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         else -> head.second
     }
 
-    // 碰撞检测与轮回逻辑
-    val isOutOfBounds = nextX !in 0 until GameConfig.GRID_SIZE || nextY !in 0 until GameConfig.GRID_SIZE
-    
-    if (isOutOfBounds) {
-        if (settings.isLoopMode) {
-            // 轮回模式：坐标取模实现穿墙
-            nextX = (nextX + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
-            nextY = (nextY + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
-        } else if (state.hasShield) {
-            return triggerShield(state)
-        } else {
-            return state.copy(isGameOver = true)
+    // 轮回模式逻辑
+    if (settings.isLoopMode) {
+        nextX = (nextX + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
+        nextY = (nextY + GameConfig.GRID_SIZE) % GameConfig.GRID_SIZE
+    } else {
+        // 普通碰撞检测
+        if (nextX !in 0 until GameConfig.GRID_SIZE || nextY !in 0 until GameConfig.GRID_SIZE) {
+            return if (state.hasShield) triggerShield(state) else state.copy(isGameOver = true)
         }
     }
 
     val newHead = nextX to nextY
-    // 自身碰撞检测
     if (state.snake.contains(newHead) && !state.isInvincible) {
         return if (state.hasShield) triggerShield(state) else state.copy(isGameOver = true)
     }
 
-    // 移动逻辑：使用 MutableList 确保 removeAt 可用
     val newSnake = state.snake.toMutableList()
     newSnake.add(0, newHead)
 
@@ -80,8 +75,7 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     if (newHead == state.food) {
         currentScore += 10
         currentFood = Random.nextInt(GameConfig.GRID_SIZE) to Random.nextInt(GameConfig.GRID_SIZE)
-        // 10% 几率产生盾牌
-        if (Random.nextFloat() < 0.1f && currentItem == null) {
+        if (Random.nextFloat() < 0.15f && currentItem == null) {
             currentItem = SpecialItem(Random.nextInt(GameConfig.GRID_SIZE) to Random.nextInt(GameConfig.GRID_SIZE), ItemType.SHIELD)
         }
     } else {
@@ -96,7 +90,8 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
 
     return state.copy(
         snake = newSnake, food = currentFood, score = currentScore,
-        specialItem = currentItem, hasShield = currentShield
+        specialItem = currentItem, hasShield = currentShield,
+        highScore = if (currentScore > state.highScore) currentScore else state.highScore
     )
 }
 

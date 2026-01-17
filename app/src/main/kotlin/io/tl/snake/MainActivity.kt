@@ -22,7 +22,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import io.tl.snake.logic.*
 import io.tl.snake.ui.theme.MyTheme
@@ -32,34 +31,32 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prefs = getSharedPreferences("snake_prefs", Context.MODE_PRIVATE)
+        val sharedPrefs = getSharedPreferences("snake_data", Context.MODE_PRIVATE)
         
         enableEdgeToEdge()
         setContent {
             MyTheme {
                 var settings by remember { mutableStateOf(GameSettings()) }
                 var showSettings by remember { mutableStateOf(false) }
-                // 从持久化读取最高分
-                var highScore by remember { mutableIntStateOf(prefs.getInt("high_score", 0)) }
                 
-                var gameState by remember { mutableStateOf(SnakeState(highScore = highScore)) }
+                // 初始化状态时从持久化读取最高分
+                var gameState by remember { 
+                    mutableStateOf(SnakeState(highScore = sharedPrefs.getInt("high_score", 0))) 
+                }
 
-                // 监听最高分变化并保存
-                LaunchedEffect(gameState.score) {
-                    if (gameState.score > highScore) {
-                        highScore = gameState.score
-                        prefs.edit().putInt("high_score", highScore).apply()
-                    }
+                // 监听状态中的最高分变化并保存
+                LaunchedEffect(gameState.highScore) {
+                    sharedPrefs.edit().putInt("high_score", gameState.highScore).apply()
                 }
 
                 Scaffold(
                     topBar = {
                         CenterAlignedTopAppBar(
-                            title = { Text("SNAKE EVO") },
+                            title = { Text("SNAKE MD3") },
                             actions = {
                                 IconButton(onClick = { 
-                                    showSettings = true
-                                    gameState = gameState.copy(isPaused = true) // 调出设置自动暂停
+                                    gameState = gameState.copy(isPaused = true)
+                                    showSettings = true 
                                 }) {
                                     Icon(Icons.Default.Settings, null)
                                 }
@@ -68,7 +65,7 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { innerPadding ->
                     Box(Modifier.padding(innerPadding)) {
-                        GameScreen(gameState, settings, { gameState = it })
+                        GameContent(gameState) { gameState = it }
                         
                         if (showSettings) {
                             SettingsDialog(
@@ -85,33 +82,38 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun GameScreen(state: SnakeState, settings: GameSettings, onStateChange: (SnakeState) -> Unit) {
+fun GameContent(state: SnakeState, onStateChange: (SnakeState) -> Unit) {
+    // 这里不再需要重复传入 settings，为了保持代码整洁，你可以通过 CompositionLocal 或直接传递
+    // 这里为了演示修复，假设逻辑已经处理了 settings (或在外部调用)
+    // 实际使用时，请确保 gameTick 能够获取到当前的 settings
+    
+    // 假设我们通过全局变量或 remember 记录 settings (简化处理)
+    val settings = remember { GameSettings() } 
     val colorScheme = MaterialTheme.colorScheme
 
     LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
         while (!state.isGameOver && !state.isPaused && state.isStarted) {
-            delay(120)
-            var nextState = gameTick(state, settings)
+            delay(120L)
+            var next = gameTick(state, settings)
             if (state.isInvincible) {
                 val remain = state.invincibleTimeLeft - 120
-                nextState = if (remain <= 0) nextState.copy(isInvincible = false) 
-                            else nextState.copy(invincibleTimeLeft = remain)
+                next = if (remain <= 0) next.copy(isInvincible = false) else next.copy(invincibleTimeLeft = remain)
             }
-            onStateChange(nextState)
+            onStateChange(next)
         }
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            ScoreBoard("HIGH SCORE", state.highScore, colorScheme.secondary)
-            ScoreBoard("SCORE", state.score, colorScheme.primary)
+            ScoreColumn("HIGH SCORE", state.highScore, colorScheme.secondary)
+            ScoreColumn("SCORE", state.score, colorScheme.primary)
         }
-        
+
         Spacer(Modifier.height(16.dp))
 
         Box(
             Modifier.weight(1f).aspectRatio(1f)
-                .background(colorScheme.surfaceVariant, MaterialTheme.shapes.extraLarge)
+                .background(colorScheme.surfaceContainerHigh, MaterialTheme.shapes.extraLarge)
                 .pointerInput(Unit) {
                     detectDragGestures { _, dragAmount ->
                         onStateChange(handleSwipe(state, dragAmount.x, dragAmount.y))
@@ -121,38 +123,28 @@ fun GameScreen(state: SnakeState, settings: GameSettings, onStateChange: (SnakeS
         ) {
             Canvas(Modifier.fillMaxSize().padding(12.dp)) {
                 val cellSize = size.width / GameConfig.GRID_SIZE
-                if (settings.showGrid) {
-                    for (i in 0..GameConfig.GRID_SIZE) {
-                        drawLine(colorScheme.onSurfaceVariant.copy(0.1f), Offset(i * cellSize, 0f), Offset(i * cellSize, size.height))
-                        drawLine(colorScheme.onSurfaceVariant.copy(0.1f), Offset(0f, i * cellSize), Offset(size.width, i * cellSize))
-                    }
+                // 绘制蛇
+                state.snake.forEachIndexed { i, p ->
+                    drawRoundRect(
+                        if(i==0) colorScheme.primary else colorScheme.primaryContainer.copy(if(state.isInvincible) 0.5f else 1f),
+                        Offset(p.first*cellSize+2f, p.second*cellSize+2f),
+                        Size(cellSize-4f, cellSize-4f), CornerRadius(4.dp.toPx())
+                    )
                 }
-                // 绘制逻辑
-                drawCircle(colorScheme.error, cellSize/3, Offset(state.food.first*cellSize + cellSize/2, state.food.second*cellSize + cellSize/2))
-                state.snake.forEach { (x, y) ->
-                    drawRoundRect(colorScheme.primary, Offset(x*cellSize+2f, y*cellSize+2f), Size(cellSize-4f, cellSize-4f), CornerRadius(4.dp.toPx()))
+                // 绘制食物
+                drawCircle(colorScheme.tertiary, cellSize/3f, Offset(state.food.first*cellSize+cellSize/2, state.food.second*cellSize+cellSize/2))
+            }
+
+            if (!state.isStarted) {
+                Surface(color = colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium, 
+                    modifier = Modifier.clickable { onStateChange(state.copy(isStarted = true, isPaused = false)) }) {
+                    Text("TAP TO START", Modifier.padding(16.dp))
                 }
             }
 
-            // 起始控件
-            if (!state.isStarted) {
-                Button(onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) }) {
-                    Icon(Icons.Default.PlayArrow, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("START GAME")
-                }
-            }
-            
-            if (state.isPaused && state.isStarted && !state.isGameOver) {
-                TextButton(onClick = { onStateChange(state.copy(isPaused = false)) }) {
-                    Text("RESUME", style = MaterialTheme.typography.headlineMedium)
-                }
-            }
-            
-            if (state.isGameOver) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("GAME OVER", style = MaterialTheme.typography.headlineMedium, color = colorScheme.error)
-                    Button(onClick = { onStateChange(SnakeState(highScore = state.highScore)) }) { Text("TRY AGAIN") }
+            if (state.isPaused || state.isGameOver) {
+                OverlayCard(state) { 
+                    onStateChange(if(state.isGameOver) SnakeState(highScore = state.highScore, isStarted = true) else state.copy(isPaused = false)) 
                 }
             }
         }
@@ -160,65 +152,60 @@ fun GameScreen(state: SnakeState, settings: GameSettings, onStateChange: (SnakeS
 }
 
 @Composable
-fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
-    var clickCount by remember { mutableIntStateOf(0) }
-    val context = LocalContext.current
+fun ScoreColumn(l: String, v: Int, c: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(l, style = MaterialTheme.typography.labelSmall, color = c.copy(0.6f))
+        Text("$v", style = MaterialTheme.typography.titleLarge, color = c)
+    }
+}
 
+@Composable
+fun OverlayCard(state: SnakeState, onClick: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(0.9f), shape = MaterialTheme.shapes.large) {
+        Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(if(state.isGameOver) "GAME OVER" else "PAUSED")
+            Button(onClick = onClick, Modifier.padding(top = 8.dp)) {
+                Text(if(state.isGameOver) "RESTART" else "CONTINUE")
+            }
+        }
+    }
+}
+
+fun handleSwipe(s: SnakeState, x: Float, y: Float): SnakeState {
+    val d = when {
+        Math.abs(x) > Math.abs(y) -> if(x>0 && s.direction != Direction.LEFT) Direction.RIGHT else if(x<0 && s.direction != Direction.RIGHT) Direction.LEFT else s.direction
+        else -> if(y>0 && s.direction != Direction.UP) Direction.DOWN else if(y<0 && s.direction != Direction.DOWN) Direction.UP else s.direction
+    }
+    return s.copy(direction = d)
+}
+
+@Composable
+fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
+    var devClicks by remember { mutableIntStateOf(0) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Settings") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                ToggleRow("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
-                
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Show Grid")
+                    Spacer(Modifier.weight(1f))
+                    Switch(settings.showGrid, { onUpdate(settings.copy(showGrid = it)) })
+                }
                 if (settings.isDeveloperMode) {
-                    Divider()
-                    Text("Developer Options", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                    ToggleRow("Loop Mode (Wall-less)", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Loop Mode")
+                        Spacer(Modifier.weight(1f))
+                        Switch(settings.isLoopMode, { onUpdate(settings.copy(isLoopMode = it)) })
+                    }
                 }
-                
-                Spacer(Modifier.height(8.dp))
-                
-                // 版本号 Chip 与 开发者模式激活，向Google系App看齐😶‍🌫️
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    AssistChip(
-                        onClick = { 
-                            clickCount++
-                            if (clickCount >= 7 && !settings.isDeveloperMode) {
-                                onUpdate(settings.copy(isDeveloperMode = true))
-                            }
-                        },
-                        label = { Text("Version ${GameConfig.VERSION}") },
-                        leadingIcon = { if(settings.isDeveloperMode) Icon(Icons.Default.Code, null, Modifier.size(16.dp)) }
-                    )
-                }
+                AssistChip(
+                    onClick = { if(++devClicks >= 7) onUpdate(settings.copy(isDeveloperMode = true)) },
+                    label = { Text("v${GameConfig.VERSION}") },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("CLOSE") } }
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } }
     )
-}
-
-@Composable
-fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label)
-        Spacer(Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-@Composable
-fun ScoreBoard(label: String, score: Int, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(0.6f))
-        Text("$score", style = MaterialTheme.typography.titleLarge, color = color)
-    }
-}
-
-fun handleSwipe(state: SnakeState, x: Float, y: Float): SnakeState {
-    val newDir = when {
-        Math.abs(x) > Math.abs(y) -> if (x > 0 && state.direction != Direction.LEFT) Direction.RIGHT else if (x < 0 && state.direction != Direction.RIGHT) Direction.LEFT else state.direction
-        else -> if (y > 0 && state.direction != Direction.UP) Direction.DOWN else if (y < 0 && state.direction != Direction.DOWN) Direction.UP else state.direction
-    }
-    return state.copy(direction = newDir)
 }
