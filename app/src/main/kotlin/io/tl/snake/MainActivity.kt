@@ -114,16 +114,20 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
         }
 
         BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
-            val cellBase = 22.dp
             val density = LocalContext.current.resources.displayMetrics.density
+            val cellBase = 22f * density // 基础单元格大小（像素）
             
-            val gridW = if (settings.dynamicGrid) (constraints.maxWidth / (cellBase.value * density)).toInt().coerceIn(10, 30) else 20
-            val gridH = if (settings.dynamicGrid) (constraints.maxHeight / (cellBase.value * density)).toInt().coerceIn(10, 45) else 20
+            // 1. 动态计算逻辑格数：容器宽度除以基础大小
+            val gridW = if (settings.dynamicGrid) (constraints.maxWidth / cellBase).toInt().coerceIn(10, 30) else 20
+            val gridH = if (settings.dynamicGrid) (constraints.maxHeight / cellBase).toInt().coerceIn(10, 45) else 20
             
-            // 关键修复：显式转换为 Float 以适配 Offset 和 Size
+            // 2. 视觉适配：计算在这个格数下，能填满容器的最佳 cellSize（像素）
+            // 这里不再反求容器大小，而是让格数适应当前容器
             val cellSizePx = (constraints.maxWidth.toFloat() / gridW).coerceAtMost(constraints.maxHeight.toFloat() / gridH)
-            val canvasWidthPx = cellSizePx * gridW
-            val canvasHeightPx = cellSizePx * gridH
+            
+            // 3. 最终显示区域（居中对齐用）
+            val displayWidth = cellSizePx * gridW
+            val displayHeight = cellSizePx * gridH
 
             LaunchedEffect(gridW, gridH) {
                 if (state.gridWidth != gridW || state.gridHeight != gridH) {
@@ -134,7 +138,7 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Box(
                     modifier = Modifier
-                        .size((canvasWidthPx / density).dp, (canvasHeightPx / density).dp)
+                        .size((displayWidth / density).dp, (displayHeight / density).dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(colorScheme.surfaceContainerHigh)
                         .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
@@ -149,38 +153,50 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
                     val dimAlpha by animateFloatAsState(if (!state.isStarted) 0.8f else 0f, label = "dim")
 
                     Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = 1f - dimAlpha)) {
-                        // 修复：所有坐标计算均显式 Float 化
+                        // 绘制网格：严格按照计算出的 cellSizePx 绘制
                         if (settings.showGrid) {
-                            for (i in 0..gridW) drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, size.height), 1f)
-                            for (i in 0..gridH) drawLine(colorScheme.outlineVariant.copy(0.2f), Offset(0f, i * cellSizePx), Offset(size.width, i * cellSizePx), 1f)
+                            for (i in 0..gridW) {
+                                drawLine(colorScheme.outlineVariant.copy(0.15f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, displayHeight), 1f)
+                            }
+                            for (i in 0..gridH) {
+                                drawLine(colorScheme.outlineVariant.copy(0.15f), Offset(0f, i * cellSizePx), Offset(displayWidth, i * cellSizePx), 1f)
+                            }
                         }
                         
+                        // 绘制物品
                         state.objects.forEach { obj ->
-                            drawCircle(obj.type.color, (cellSizePx / 3f) * pulse, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
+                            drawCircle(
+                                color = obj.type.color,
+                                radius = (cellSizePx / 3.5f) * pulse,
+                                center = Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f)
+                            )
                         }
 
+                        // 绘制蛇身
                         state.snake.forEachIndexed { i, p ->
                             val fraction = i.toFloat() / state.snake.size.coerceAtLeast(1)
                             val baseColor = if (i == 0) colorScheme.primary else colorScheme.primaryContainer
-                            val color = baseColor.copy(alpha = (1f - fraction * 0.7f).coerceAtLeast(0.3f))
+                            val color = baseColor.copy(alpha = (1f - fraction * 0.75f).coerceAtLeast(0.25f))
                             
-                            // 修复：绘制矩形参数 Float 化
                             drawRoundRect(
                                 color = color,
-                                topLeft = Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f),
-                                size = Size(cellSizePx - 3f, cellSizePx - 3f),
+                                topLeft = Offset(p.first * cellSizePx + 1f, p.second * cellSizePx + 1f),
+                                size = Size(cellSizePx - 2f, cellSizePx - 2f),
                                 cornerRadius = CornerRadius(if(i==0) 6.dp.toPx() else 4.dp.toPx())
                             )
                         }
                     }
 
                     if (!state.isStarted) {
-                        Button(
+                        Surface(
                             onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) },
-                            modifier = Modifier.align(Alignment.Center),
-                            shape = RoundedCornerShape(12.dp)
+                            color = colorScheme.primary,
+                            shape = RoundedCornerShape(12.dp),
+                            shadowElevation = 8.dp,
+                            modifier = Modifier.align(Alignment.Center)
                         ) {
-                            Text("START GAME", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
+                            Text("START GAME", Modifier.padding(horizontal = 32.dp, vertical = 16.dp), 
+                                fontWeight = FontWeight.Bold, color = colorScheme.onPrimary)
                         }
                     }
                 }
