@@ -9,8 +9,7 @@ import kotlin.random.Random
 object GameConfig {
     const val BASE_SPEED = 150L
     const val MIN_SPEED = 60L
-    const val VERSION = "1.9.3"
-    const val GHOST_DURATION_MS = 15000L // 15秒限时
+    const val GHOST_DURATION_MS = 15000L 
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
@@ -32,7 +31,7 @@ data class GameSettings(
     val dynamicGrid: Boolean = true,
     val enableVibration: Boolean = true,
     val maxObjects: Int = 5,
-    val isGhostPermanent: Boolean = false, // 设置项：Ghost是否永久
+    val isGhostPermanent: Boolean = false,
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
@@ -50,7 +49,7 @@ data class SnakeState(
     val gridHeight: Int = 20,
     val speedModifier: Long = 0,
     val shieldCount: Int = 0,
-    val ghostTimeRemaining: Long = 0L // 幽灵效果剩余时间
+    val ghostTimeRemaining: Long = 0L 
 )
 
 fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): SnakeState {
@@ -68,10 +67,9 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
         else -> head.second 
     }
 
-    // 幽灵模式判定
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0
 
-    // 边界检测
+    // 死亡判定
     var hitWall = false
     if (settings.isLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -81,13 +79,11 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
     }
 
     val nH = nX to nY
-    // 自撞检测 (Ghost开启时免疫)
     val hitSelf = state.snake.contains(nH) && !isGhostActive
 
-    // 死亡与护盾逻辑
     if (hitWall || hitSelf) {
         return if (state.shieldCount > 0) {
-            state.copy(shieldCount = state.shieldCount - 1) // 消耗护盾，免死一次
+            state.copy(shieldCount = state.shieldCount - 1)
         } else {
             state.copy(isGameOver = true)
         }
@@ -98,7 +94,6 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
     val ic = state.itemsCollected.toMutableMap()
     var sm = state.speedModifier
     var sCount = state.shieldCount
-    // 更新Ghost计时
     var gTime = if (settings.isGhostPermanent) 0L else (state.ghostTimeRemaining - tickDuration).coerceAtLeast(0L)
 
     val hitObject = state.objects.find { it.pos == nH }
@@ -115,13 +110,11 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
             ItemType.GHOST -> if (!settings.isGhostPermanent) gTime = GameConfig.GHOST_DURATION_MS
             else -> {}
         }
-        
         if (hitObject.type.score <= 0) nS.removeAt(nS.size - 1)
     } else {
         nS.removeAt(nS.size - 1)
     }
 
-    // 道具生成
     val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
     if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.15f && allowedTypes.isNotEmpty()) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
