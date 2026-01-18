@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -82,7 +83,10 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(state, settings, persistentHS, pulse, onHSReset = { persistentHS = 0; sp.edit().putInt("hs", 0).apply(); state = state.copy(highScore = 0) }, onStateChange = { if (it.direction != state.direction) triggerVibration(context, settings.enableVibration, 10); state = it })
+                        GameContent(state, settings, persistentHS, pulse, 
+                            onHSReset = { persistentHS = 0; sp.edit().putInt("hs", 0).apply(); state = state.copy(highScore = 0); triggerVibration(context, settings.enableVibration, 100) }, 
+                            onStateChange = { if (it.direction != state.direction) triggerVibration(context, settings.enableVibration, 10); state = it }
+                        )
                         if (showSettings) SettingsDialog(settings, onDismiss = { showSettings = false }) { settings = it; saveSettings(it) }
                     }
                 }
@@ -132,11 +136,19 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, pu
                             for(i in 0..gridH) drawLine(Color.Gray.copy(0.1f), Offset(0f, i*cellSize), Offset(gridW*cellSize, i*cellSize))
                         }
                         state.objects.forEach { drawCircle(it.type.color, cellSize/3.5f, Offset(it.pos.first*cellSize+cellSize/2, it.pos.second*cellSize+cellSize/2)) }
-                        val isPermGhost = (state.cumulativeCounts[ItemType.GHOST] ?: 0) >= (settings.permThresholds[ItemType.GHOST] ?: Int.MAX_VALUE)
+                        
+                        // 绘制蛇身
                         state.snake.forEachIndexed { i, p ->
                             val color = if (settings.useGradient) lerp(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primaryContainer, i.toFloat()/state.snake.size) else MaterialTheme.colorScheme.primary
-                            val alpha = if (settings.usePulse && (state.ghostTicks > 0 || isPermGhost)) pulse else 1f
+                            val alpha = if (settings.usePulse && state.ghostTicks > 0) pulse else 1f
                             drawRoundRect(if(i==0 && state.hasShield) Color.Cyan else color, Offset(p.first*cellSize+1f, p.second*cellSize+1f), Size(cellSize-2f, cellSize-2f), CornerRadius(4.dp.toPx()), alpha = alpha)
+                            
+                            // 磁铁特效：蛇头两侧蓝红呼吸动效
+                            if (i == 0 && state.magnetTicks > 0) {
+                                val effectSize = cellSize * 0.4f * pulse
+                                drawCircle(Color.Red.copy(0.6f), effectSize, Offset(p.first*cellSize, p.second*cellSize + cellSize/2))
+                                drawCircle(Color.Blue.copy(0.6f), effectSize, Offset(p.first*cellSize + cellSize, p.second*cellSize + cellSize/2))
+                            }
                         }
                     }
                     if (!state.isStarted) Button(onClick = { onStateChange(state.copy(isStarted = true)) }, Modifier.align(Alignment.Center)) { Text("START") }
@@ -145,6 +157,24 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, pu
         }
     }
     if (state.isGameOver) AlertDialog(onDismissRequest={}, confirmButton={ Button(onClick={ onStateChange(SnakeState(highScore=persistentHS, isStarted=true, gridWidth=state.gridWidth, gridHeight=state.gridHeight)) }){ Text("REPLAY") } }, title={ Text("Game Over") }, text={ Text("Score: ${state.score}") })
+}
+
+// --- 顶级辅助函数（解决 Conflict） ---
+
+fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
+    if (abs(dx) < 15f && abs(dy) < 15f) return s
+    val newDir = if (abs(dx) > abs(dy)) {
+        if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT else s.direction
+    } else {
+        if (dy > 0 && s.direction != Direction.UP) Direction.DOWN else if (dy < 0 && s.direction != Direction.DOWN) Direction.UP else s.direction
+    }
+    return s.copy(direction = newDir)
+}
+
+fun triggerVibration(c: Context, e: Boolean, d: Long) {
+    if (!e) return
+    val v = c.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) v.vibrate(VibrationEffect.createOneShot(d, VibrationEffect.DEFAULT_AMPLITUDE)) else v.vibrate(d)
 }
 
 @Composable
@@ -172,22 +202,6 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
             SettingToggle("Status Pulse", settings.usePulse) { onUpdate(settings.copy(usePulse = it)) }
         }
     })
-}
-
-fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
-    if (abs(dx) < 15f && abs(dy) < 15f) return s
-    val newDir = if (abs(dx) > abs(dy)) {
-        if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT else s.direction
-    } else {
-        if (dy > 0 && s.direction != Direction.UP) Direction.DOWN else if (dy < 0 && s.direction != Direction.DOWN) Direction.UP else s.direction
-    }
-    return s.copy(direction = newDir)
-}
-
-fun triggerVibration(c: Context, e: Boolean, d: Long) {
-    if (!e) return
-    val v = c.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) v.vibrate(VibrationEffect.createOneShot(d, VibrationEffect.DEFAULT_AMPLITUDE)) else v.vibrate(d)
 }
 
 @Composable fun SettingToggle(l: String, c: Boolean, o: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().height(48.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) { Text(l); Switch(checked = c, onCheckedChange = o) } }
