@@ -67,13 +67,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MyTheme {
-                val context = LocalContext.current // 提前获取上下文
+                val context = LocalContext.current
                 var settings by remember { mutableStateOf(loadSettings()) }
                 var showSettings by remember { mutableStateOf(false) }
                 var persistentHS by remember { mutableStateOf(sp.getInt("hs", 0)) }
                 var state by remember { mutableStateOf(SnakeState(highScore = persistentHS)) }
                 
-                val pulseAlpha by rememberInfiniteTransition(label="p").animateFloat(0.4f, 1f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label="a")
+                val pulse by rememberInfiniteTransition(label="p").animateFloat(0.4f, 1f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label="a")
 
                 Scaffold(
                     topBar = {
@@ -84,13 +84,13 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(state, settings, persistentHS, pulseAlpha, 
+                        GameContent(state, settings, persistentHS, pulse, 
                             onHSReset = { 
                                 persistentHS = 0; sp.edit().putInt("hs", 0).apply(); state = state.copy(highScore = 0)
-                                triggerVibration(context, settings.enableVibration, 100L) // 此处调用已修复
+                                doVibrate(context, settings.enableVibration, 100L)
                             }, 
                             onStateChange = { 
-                                if (it.direction != state.direction) triggerVibration(context, settings.enableVibration, 15L)
+                                if (it.direction != state.direction) doVibrate(context, settings.enableVibration, 15L)
                                 state = it 
                             }
                         )
@@ -137,7 +137,7 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, pu
                         if (state.isStarted && !state.isPaused && !state.isGameOver) {
                             detectDragGestures(onDragStart={inputLocked=false}, onDrag={c, d -> 
                                 c.consume(); if(!inputLocked){ 
-                                    val ns = handleInputLogic(currentState, d.x, d.y)
+                                    val ns = handleLogicInput(currentState, d.x, d.y)
                                     if(ns.direction != currentState.direction){ onStateChange(ns); inputLocked=true }
                                 }
                             })
@@ -159,10 +159,11 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, pu
                             val alpha = if (settings.usePulse && (state.ghostTicks > 0 || isPermGhost)) pulse else 1f
                             drawRoundRect(if(i==0 && state.hasShield) Color.Cyan else color, Offset(p.first*cellSize+1f, p.second*cellSize+1f), Size(cellSize-2f, cellSize-2f), CornerRadius(4.dp.toPx()), alpha = alpha)
                             
+                            // 磁铁吸附特效：红蓝双色呼吸圈
                             if (i == 0 && (state.magnetTicks > 0 || isPermMagnet)) {
-                                val radius = cellSize * 0.45f * pulse
-                                drawCircle(Color.Red.copy(0.4f), radius, Offset(p.first * cellSize, p.second * cellSize + cellSize / 2))
-                                drawCircle(Color.Blue.copy(0.4f), radius, Offset(p.first * cellSize + cellSize, p.second * cellSize + cellSize / 2))
+                                val r = cellSize * 0.45f * pulse
+                                drawCircle(Color.Red.copy(0.45f), r, Offset(p.first * cellSize, p.second * cellSize + cellSize / 2))
+                                drawCircle(Color.Blue.copy(0.45f), r, Offset(p.first * cellSize + cellSize, p.second * cellSize + cellSize / 2))
                             }
                         }
                     }
@@ -174,9 +175,9 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, pu
     if (state.isGameOver) AlertDialog(onDismissRequest={}, confirmButton={ Button(onClick={ onStateChange(SnakeState(highScore=persistentHS, isStarted=true, gridWidth=state.gridWidth, gridHeight=state.gridHeight)) }){ Text("REPLAY") } }, title={ Text("Game Over") }, text={ Text("Score: ${state.score}") })
 }
 
-// --- 顶级工具函数 (放在类外) ---
+// --- 辅助工具 (类外定义) ---
 
-fun handleInputLogic(s: SnakeState, dx: Float, dy: Float): SnakeState {
+fun handleLogicInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
     if (abs(dx) < 15f && abs(dy) < 15f) return s
     val newDir = if (abs(dx) > abs(dy)) {
         if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT else s.direction
@@ -186,13 +187,13 @@ fun handleInputLogic(s: SnakeState, dx: Float, dy: Float): SnakeState {
     return s.copy(direction = newDir)
 }
 
-fun triggerVibration(c: Context, enabled: Boolean, duration: Long) {
+fun doVibrate(c: Context, enabled: Boolean, ms: Long) {
     if (!enabled) return
-    val v = c.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+    val v = c.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        v.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
+        v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
     } else {
-        @Suppress("DEPRECATION") v.vibrate(duration)
+        @Suppress("DEPRECATION") v.vibrate(ms)
     }
 }
 
@@ -216,15 +217,15 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                 }
             }
             HorizontalDivider()
-            SettingToggleItem("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
-            SettingToggleItem("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
-            SettingToggleItem("Body Gradient", settings.useGradient) { onUpdate(settings.copy(useGradient = it)) }
-            SettingToggleItem("Status Pulse", settings.usePulse) { onUpdate(settings.copy(usePulse = it)) }
+            SettingRow("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
+            SettingRow("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
+            SettingRow("Body Gradient", settings.useGradient) { onUpdate(settings.copy(useGradient = it)) }
+            SettingRow("Status Pulse", settings.usePulse) { onUpdate(settings.copy(usePulse = it)) }
         }
     })
 }
 
-@Composable fun SettingToggleItem(l: String, c: Boolean, o: (Boolean) -> Unit) { 
+@Composable fun SettingRow(l: String, c: Boolean, o: (Boolean) -> Unit) { 
     Row(Modifier.fillMaxWidth().height(48.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) { 
         Text(l); Switch(checked = c, onCheckedChange = o) 
     } 
