@@ -1,6 +1,9 @@
 package io.tl.snake.logic
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import kotlin.random.Random
 
 object GameConfig {
@@ -11,13 +14,14 @@ object GameConfig {
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 
-enum class ItemType(val color: Color, val score: Int, val weight: Float, val label: String) {
-    FOOD_BASIC(Color(0xFF4CAF50), 10, 0.7f, "Basic Food"),
-    FOOD_GOLD(Color(0xFFFFD700), 30, 0.15f, "Golden Food"),
-    FOOD_POISON(Color(0xFF9C27B0), -20, 0.05f, "Poison"),
-    SHIELD(Color(0xFF2196F3), 50, 0.03f, "Shield"),
-    SLOW(Color(0xFFFF9800), 50, 0.04f, "Slow Down"),
-    GHOST(Color(0xFFE91E63), 50, 0.03f, "Ghost Ball")
+// 为道具添加对应的 Icon
+enum class ItemType(val color: Color, val score: Int, val weight: Float, val label: String, val icon: ImageVector) {
+    FOOD_BASIC(Color(0xFF4CAF50), 10, 0.7f, "Basic", Icons.Default.Fastfood),
+    FOOD_GOLD(Color(0xFFFFD700), 30, 0.15f, "Gold", Icons.Default.Star),
+    FOOD_POISON(Color(0xFF9C27B0), -20, 0.05f, "Poison", Icons.Default.Dangerous),
+    SHIELD(Color(0xFF2196F3), 50, 0.03f, "Shield", Icons.Default.Shield),
+    SLOW(Color(0xFFFF9800), 50, 0.04f, "Slow", Icons.Default.AvTimer),
+    GHOST(Color(0xFFE91E63), 50, 0.03f, "Ghost", Icons.Default.Deblur)
 }
 
 data class GameObject(val pos: Pair<Int, Int>, val type: ItemType)
@@ -30,15 +34,11 @@ data class SnakeState(
     val isPaused: Boolean = false,
     val isStarted: Boolean = false,
     val score: Int = 0,
-    val highScore: Int = 0, 
+    val highScore: Int = 0,
     val itemsCollected: Map<ItemType, Int> = emptyMap(),
-    val hasShield: Boolean = false,
-    val isGhostMode: Boolean = false,
-    val speedModifier: Long = 0,
-    val isInvincible: Boolean = false,
-    val invincibleTimeLeft: Long = 0,
     val gridWidth: Int = 20,
-    val gridHeight: Int = 20
+    val gridHeight: Int = 20,
+    val speedModifier: Long = 0
 )
 
 data class GameSettings(
@@ -46,7 +46,9 @@ data class GameSettings(
     val isLoopMode: Boolean = false,
     val dynamicGrid: Boolean = true,
     val enableVibration: Boolean = true,
-    val maxObjects: Int = 5
+    val maxObjects: Int = 5,
+    // 控制每种道具是否允许生成
+    val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
 fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
@@ -68,20 +70,16 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         nX = (nX + state.gridWidth) % state.gridWidth
         nY = (nY + state.gridHeight) % state.gridHeight
     } else if (nX !in 0 until state.gridWidth || nY !in 0 until state.gridHeight) {
-        return if (state.hasShield) triggerShield(state) else state.copy(isGameOver = true)
+        return state.copy(isGameOver = true)
     }
 
     val nH = nX to nY
-    if (state.snake.contains(nH) && !state.isInvincible && !state.isGhostMode) {
-        return if (state.hasShield) triggerShield(state) else state.copy(isGameOver = true)
-    }
+    if (state.snake.contains(nH)) return state.copy(isGameOver = true)
 
     val nS = state.snake.toMutableList().apply { add(0, nH) }
     var sc = state.score
     val ic = state.itemsCollected.toMutableMap()
-    var gm = state.isGhostMode
     var sm = state.speedModifier
-    var sh = state.hasShield
 
     val hitObject = state.objects.find { it.pos == nH }
     val remainingObjects = state.objects.toMutableList()
@@ -90,36 +88,24 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         remainingObjects.remove(hitObject)
         sc += hitObject.type.score
         ic[hitObject.type] = (ic[hitObject.type] ?: 0) + 1
-        when(hitObject.type) {
-            ItemType.SHIELD -> sh = true
-            ItemType.SLOW -> sm += 20
-            ItemType.GHOST -> gm = true
-            else -> {}
-        }
+        if (hitObject.type == ItemType.SLOW) sm += 15
         if (hitObject.type.score <= 0) nS.removeAt(nS.size - 1)
     } else {
         nS.removeAt(nS.size - 1)
     }
 
-    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.2f) {
+    // 只生成被勾选的道具
+    val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
+    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.15f && allowedTypes.isNotEmpty()) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
         if (!nS.contains(newPos) && remainingObjects.none { it.pos == newPos }) {
-            val type = ItemType.entries.let { e ->
-                val r = Random.nextFloat()
-                var acc = 0f
-                e.first { acc += it.weight; r <= acc }
-            }
-            remainingObjects.add(GameObject(newPos, type))
+            val totalWeight = allowedTypes.sumOf { it.weight.toDouble() }
+            val r = Random.nextDouble() * totalWeight
+            var acc = 0.0
+            val selectedType = allowedTypes.first { acc += it.weight; r <= acc }
+            remainingObjects.add(GameObject(newPos, selectedType))
         }
     }
 
-    return state.copy(
-        snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), 
-        itemsCollected = ic, isGhostMode = gm, speedModifier = sm, hasShield = sh
-    )
+    return state.copy(snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), itemsCollected = ic, speedModifier = sm)
 }
-
-private fun triggerShield(s: SnakeState) = s.copy(
-    snake = listOf(s.gridWidth/2 to s.gridHeight/2, s.gridWidth/2 to s.gridHeight/2 + 1),
-    hasShield = false, isInvincible = true, invincibleTimeLeft = 3000L
-)

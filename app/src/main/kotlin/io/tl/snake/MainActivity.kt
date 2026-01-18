@@ -11,7 +11,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -34,7 +37,7 @@ import org.json.JSONObject
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
-    @OptIn(ExperimentalMaterial3Api::class)
+    @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val sp = getSharedPreferences("snake_prefs", Context.MODE_PRIVATE)
@@ -43,12 +46,17 @@ class MainActivity : ComponentActivity() {
             val jsonStr = sp.getString("settings", null) ?: return GameSettings()
             return try {
                 val json = JSONObject(jsonStr)
+                val itemsJson = json.optJSONObject("enabledItems")
+                val itemMap = ItemType.entries.associateWith { type ->
+                    itemsJson?.optBoolean(type.name, true) ?: true
+                }
                 GameSettings(
                     showGrid = json.optBoolean("showGrid", true),
                     isLoopMode = json.optBoolean("isLoopMode", false),
                     dynamicGrid = json.optBoolean("dynamicGrid", true),
                     enableVibration = json.optBoolean("enableVibration", true),
-                    maxObjects = json.optInt("maxObjects", 5)
+                    maxObjects = json.optInt("maxObjects", 5),
+                    enabledItems = itemMap
                 )
             } catch (e: Exception) { GameSettings() }
         }
@@ -60,6 +68,9 @@ class MainActivity : ComponentActivity() {
                 put("dynamicGrid", s.dynamicGrid)
                 put("enableVibration", s.enableVibration)
                 put("maxObjects", s.maxObjects)
+                put("enabledItems", JSONObject().apply {
+                    s.enabledItems.forEach { (k, v) -> put(k.name, v) }
+                })
             }
             sp.edit().putString("settings", json.toString()).apply()
         }
@@ -73,29 +84,11 @@ class MainActivity : ComponentActivity() {
                 var state by remember { mutableStateOf(SnakeState(highScore = persistentHS)) }
                 val context = LocalContext.current
 
-                LaunchedEffect(state.isGameOver) {
-                    if (state.isGameOver) {
-                        if (state.score > persistentHS) {
-                            persistentHS = state.score
-                            sp.edit().putInt("hs", state.score).apply()
-                        }
-                        if (settings.enableVibration) {
-                            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                            vibrator.vibrate(VibrationEffect.createOneShot(100, VibrationEffect.DEFAULT_AMPLITUDE))
-                        }
-                    }
-                }
-
                 Scaffold(
                     topBar = {
                         CenterAlignedTopAppBar(
                             title = { Text("SNAKE EVO", fontWeight = FontWeight.Black) },
                             actions = {
-                                if (state.isStarted && !state.isGameOver) {
-                                    IconButton(onClick = { state = state.copy(isPaused = !state.isPaused) }) {
-                                        Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
-                                    }
-                                }
                                 IconButton(onClick = { 
                                     if (state.isStarted && !state.isGameOver) state = state.copy(isPaused = true)
                                     showSettings = true 
@@ -105,7 +98,14 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(state, settings, persistentHS, onStateChange = { state = it })
+                        GameContent(state, settings, persistentHS, 
+                            onHSReset = { 
+                                persistentHS = 0
+                                sp.edit().putInt("hs", 0).apply()
+                                state = state.copy(highScore = 0)
+                            },
+                            onStateChange = { state = it }
+                        )
                         if (showSettings) {
                             SettingsDialog(settings, onDismiss = { showSettings = false }) {
                                 settings = it
@@ -114,31 +114,78 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+
+                // 游戏结束保存分数
+                LaunchedEffect(state.isGameOver) {
+                    if (state.isGameOver && state.score > persistentHS) {
+                        persistentHS = state.score
+                        sp.edit().putInt("hs", state.score).apply()
+                    }
+                }
             }
         }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, onStateChange: (SnakeState) -> Unit) {
+fun GameContent(
+    state: SnakeState, 
+    settings: GameSettings, 
+    persistentHS: Int, 
+    onHSReset: () -> Unit,
+    onStateChange: (SnakeState) -> Unit
+) {
     val colorScheme = MaterialTheme.colorScheme
     val currentState by rememberUpdatedState(state)
 
+    val currentSpeed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
+    
     LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
         while (!currentState.isGameOver && !currentState.isPaused && currentState.isStarted) {
-            val speed = (GameConfig.BASE_SPEED - (currentState.score / 100 * 5) + currentState.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
-            delay(speed)
+            delay(currentSpeed)
             onStateChange(gameTick(currentState, settings))
         }
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-            val displayHS = if (state.score > persistentHS) state.score else persistentHS
-            ScoreColumn("HIGH SCORE", displayHS, colorScheme.secondary)
-            ScoreColumn("CURRENT", state.score, colorScheme.primary)
+        // 顶部状态栏
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            // 最高分 Chip，支持长按归零
+            Surface(
+                onClick = {},
+                onLongClick = onHSReset,
+                shape = RoundedCornerShape(12.dp),
+                color = colorScheme.secondaryContainer,
+                modifier = Modifier.height(48.dp)
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.EmojiEvents, null, Modifier.size(18.dp), tint = colorScheme.secondary)
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("BEST", style = MaterialTheme.typography.labelSmall)
+                        Text("${if(state.score > persistentHS) state.score else persistentHS}", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            // 速度比显示 (Progress / 100)
+            val speedRatio = ((GameConfig.BASE_SPEED - currentSpeed).toFloat() / (GameConfig.BASE_SPEED - GameConfig.MIN_SPEED) * 100).toInt().coerceIn(0, 100)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("SPEED RATIO", style = MaterialTheme.typography.labelSmall)
+                Text("$speedRatio/100", fontWeight = FontWeight.Black, color = colorScheme.tertiary)
+            }
+
+            // 当前分 Chip
+            InputChip(
+                selected = true,
+                onClick = {},
+                label = { Text("${state.score}", fontWeight = FontWeight.Bold) },
+                leadingIcon = { Icon(Icons.Default.Score, null, Modifier.size(18.dp)) }
+            )
         }
 
+        // 棋盘绘制 (保持之前的优化逻辑)
         BoxWithConstraints(Modifier.fillMaxSize().weight(1f).padding(20.dp)) {
             val density = LocalContext.current.resources.displayMetrics.density
             val cellBasePx = 22f * density
@@ -158,42 +205,37 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, on
                 Box(
                     modifier = Modifier
                         .size((dW / density).dp, (dH / density).dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(colorScheme.surfaceContainerHigh)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
                         .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
                             if (state.isStarted && !state.isPaused && !state.isGameOver) {
-                                detectDragGestures { change, dragAmount ->
+                                detectDragGestures { change, drag ->
                                     change.consume()
-                                    // 核心改进：严格的轴向判定
-                                    onStateChange(handleInput(currentState, dragAmount.x, dragAmount.y))
+                                    onStateChange(handleInput(currentState, drag.x, drag.y))
                                 }
                             }
                         }
                 ) {
-                    val dimAlpha by animateFloatAsState(if (!state.isStarted) 0.8f else 0f, label = "dim")
-                    val pulse by rememberInfiniteTransition().animateFloat(0.85f, 1.1f, infiniteRepeatable(tween(800), RepeatMode.Reverse))
-
+                    val dimAlpha by animateFloatAsState(if (!state.isStarted) 0.8f else 0f)
                     Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = 1f - dimAlpha)) {
                         if (settings.showGrid) {
-                            for (i in 0..gridW) drawLine(colorScheme.outlineVariant.copy(0.1f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, dH), 1f)
-                            for (i in 0..gridH) drawLine(colorScheme.outlineVariant.copy(0.1f), Offset(0f, i * cellSizePx), Offset(dW, i * cellSizePx), 1f)
+                            for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, dH))
+                            for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(dW, i * cellSizePx))
                         }
                         state.objects.forEach { obj ->
-                            drawCircle(obj.type.color, (cellSizePx / 3.5f) * pulse, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
+                            drawCircle(obj.type.color, cellSizePx / 3f, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
                         }
                         state.snake.forEachIndexed { i, p ->
-                            val color = if (i == 0) colorScheme.primary else colorScheme.primaryContainer.copy(alpha = (1f - (i.toFloat()/state.snake.size) * 0.6f).coerceAtLeast(0.4f))
-                            drawRoundRect(color, Offset(p.first * cellSizePx + 1f, p.second * cellSizePx + 1f), Size(cellSizePx - 2f, cellSizePx - 2f), CornerRadius(if(i==0) 8.dp.toPx() else 4.dp.toPx()))
+                            val color = if (i == 0) colorScheme.primary else colorScheme.primary.copy(alpha = 0.6f)
+                            drawRoundRect(color, Offset(p.first * cellSizePx + 1f, p.second * cellSizePx + 1f), Size(cellSizePx - 2f, cellSizePx - 2f), CornerRadius(6.dp.toPx()))
                         }
                     }
 
                     if (!state.isStarted) {
-                        Surface(
-                            onClick = { onStateChange(state.copy(isStarted = true, isPaused = false, highScore = persistentHS)) },
-                            color = colorScheme.primary, shape = RoundedCornerShape(16.dp), shadowElevation = 8.dp, modifier = Modifier.align(Alignment.Center)
-                        ) {
-                            Text("START GAME", Modifier.padding(horizontal = 32.dp, vertical = 16.dp), fontWeight = FontWeight.Bold, color = colorScheme.onPrimary)
-                        }
+                        Button(
+                            onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) },
+                            modifier = Modifier.align(Alignment.Center)
+                        ) { Text("START GAME") }
                     }
                 }
             }
@@ -209,15 +251,94 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, on
     }
 }
 
-// 核心：基于滑动分量的纯净输入判定
+@Composable
+fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            // 使用填充式按钮替代 Done
+            Button(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+                Icon(Icons.Default.Check, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Apply Settings")
+            }
+        },
+        title = { Text("Configuration", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                // 常规设置
+                SettingSection("General") {
+                    SettingToggle("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
+                    SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
+                    SettingToggle("Haptic Feedback", settings.enableVibration) { onUpdate(settings.copy(enableVibration = it)) }
+                }
+
+                // 道具生成控制
+                SettingSection("Item Spawning") {
+                    ItemType.entries.forEach { type ->
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(type.icon, null, Modifier.size(20.dp), tint = type.color)
+                                Spacer(Modifier.width(12.dp))
+                                Text(type.label, style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Checkbox(
+                                checked = settings.enabledItems[type] == true,
+                                onCheckedChange = { isChecked ->
+                                    val newMap = settings.enabledItems.toMutableMap()
+                                    newMap[type] = isChecked
+                                    onUpdate(settings.copy(enabledItems = newMap))
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                SettingSection("Difficulty") {
+                    Text("Max Items: ${settings.maxObjects}", style = MaterialTheme.typography.labelLarge)
+                    Slider(value = settings.maxObjects.toFloat(), onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }, valueRange = 1f..10f)
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun SettingSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column {
+        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(8.dp))
+        content()
+        HorizontalDivider(Modifier.padding(top = 12.dp))
+    }
+}
+
+@Composable
+fun StatsList(items: Map<ItemType, Int>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ItemType.entries.forEach { type ->
+            val count = items[type] ?: 0
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(type.icon, null, Modifier.size(18.dp), tint = type.color)
+                    Spacer(Modifier.width(8.dp))
+                    Text(type.label)
+                }
+                Text("$count", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+// 辅助逻辑
 fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
     val newDir = when {
-        abs(dx) > abs(dy) -> { // 水平滑动更显著
+        abs(dx) > abs(dy) -> {
             if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT 
             else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT 
             else s.direction
         }
-        abs(dy) > abs(dx) -> { // 垂直滑动更显著
+        abs(dy) > abs(dx) -> {
             if (dy > 0 && s.direction != Direction.UP) Direction.DOWN 
             else if (dy < 0 && s.direction != Direction.DOWN) Direction.UP 
             else s.direction
@@ -225,26 +346,6 @@ fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
         else -> s.direction
     }
     return s.copy(direction = newDir)
-}
-
-@Composable
-fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("DONE") } },
-        title = { Text("Game Settings", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SettingToggle("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
-                SettingToggle("Dynamic Board", settings.dynamicGrid) { onUpdate(settings.copy(dynamicGrid = it)) }
-                SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
-                SettingToggle("Haptic Feedback", settings.enableVibration) { onUpdate(settings.copy(enableVibration = it)) }
-                HorizontalDivider()
-                Text("Max Items On Screen: ${settings.maxObjects}", style = MaterialTheme.typography.labelLarge)
-                Slider(value = settings.maxObjects.toFloat(), onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }, valueRange = 1f..10f, steps = 8)
-            }
-        }
-    )
 }
 
 @Composable
@@ -256,23 +357,12 @@ fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) ->
 }
 
 @Composable
-fun ScoreColumn(label: String, score: Int, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = color.copy(alpha = 0.7f))
-        Text("$score", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = color)
-    }
-}
-
-@Composable
 fun ResultDialog(state: SnakeState, oldHS: Int, onRestart: () -> Unit) {
-    val isNew = state.score > oldHS && state.score > 0
-    AlertDialog(onDismissRequest = {}, confirmButton = { Button(onClick = onRestart) { Text("PLAY AGAIN") } },
-        title = { Text(if(isNew) "NEW RECORD!" else "GAME OVER", fontWeight = FontWeight.ExtraBold) },
+    AlertDialog(onDismissRequest = {}, confirmButton = { Button(onClick = onRestart) { Text("REPLAY") } },
+        title = { Text("Game Over") },
         text = {
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("${state.score}", fontSize = 64.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
-                if(isNew) Text("Previous Best: $oldHS", style = MaterialTheme.typography.bodySmall)
-                HorizontalDivider(Modifier.padding(vertical = 16.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("${state.score}", fontSize = 56.sp, fontWeight = FontWeight.Black)
                 StatsList(state.itemsCollected)
             }
         }
@@ -284,17 +374,4 @@ fun PauseStatsDialog(state: SnakeState, onResume: () -> Unit) {
     AlertDialog(onDismissRequest = onResume, confirmButton = { Button(onClick = onResume) { Text("RESUME") } },
         title = { Text("Paused") }, text = { StatsList(state.itemsCollected) }
     )
-}
-
-@Composable
-fun StatsList(items: Map<ItemType, Int>) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        ItemType.entries.forEach { type ->
-            val count = items[type] ?: 0
-            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                Text(type.label, color = type.color)
-                Text("$count", fontWeight = FontWeight.Bold)
-            }
-        }
-    }
 }
