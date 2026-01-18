@@ -39,17 +39,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val sp = getSharedPreferences("snake_prefs", Context.MODE_PRIVATE)
 
-        fun triggerVibration(context: Context, enabled: Boolean, duration: Long = 50L) {
-            if (!enabled) return
-            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(duration)
-            }
-        }
-
         fun loadSettings(): GameSettings {
             val jsonStr = sp.getString("settings", null) ?: return GameSettings()
             return try {
@@ -92,14 +81,12 @@ class MainActivity : ComponentActivity() {
                 var showSettings by remember { mutableStateOf(false) }
                 var persistentHS by remember { mutableStateOf(sp.getInt("hs", 0)) }
                 var state by remember { mutableStateOf(SnakeState(highScore = persistentHS)) }
-                val context = LocalContext.current
 
                 Scaffold(
                     topBar = {
                         CenterAlignedTopAppBar(
                             title = { 
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    // 分数垂直放置在标题左侧
                                     Column(horizontalAlignment = Alignment.Start, modifier = Modifier.padding(end = 12.dp)) {
                                         Text("HI: ${if(state.score > persistentHS) state.score else persistentHS}", 
                                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
@@ -124,7 +111,6 @@ class MainActivity : ComponentActivity() {
                         GameContent(
                             state = state, 
                             settings = settings, 
-                            persistentHS = persistentHS, 
                             onStateChange = { state = it }
                         )
                         if (showSettings) {
@@ -155,7 +141,6 @@ class MainActivity : ComponentActivity() {
 fun GameContent(
     state: SnakeState, 
     settings: GameSettings, 
-    persistentHS: Int, 
     onStateChange: (SnakeState) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -171,15 +156,6 @@ fun GameContent(
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            // 状态指示
-            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), Arrangement.SpaceBetween) {
-                Text("MODE: ${if(settings.isLoopMode) "LOOP" else "WALL"}", style = MaterialTheme.typography.labelLarge)
-                if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
-                    Text("GHOST MODE", color = ItemType.GHOST.color, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            // 画布
             BoxWithConstraints(Modifier.fillMaxSize().weight(1f).padding(20.dp)) {
                 val density = LocalContext.current.resources.displayMetrics.density
                 val cellBasePx = 22f * density
@@ -211,11 +187,10 @@ fun GameContent(
                                 for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, dH))
                                 for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(dW, i * cellSizePx))
                             }
-                            // 道具
                             state.objects.forEach { obj ->
                                 drawCircle(obj.type.color, cellSizePx / 3f, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
                             }
-                            // 蛇身渐变逻辑
+                            // 蛇身渐变
                             state.snake.forEachIndexed { i, p ->
                                 val alpha = (1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)
                                 val color = when {
@@ -231,8 +206,7 @@ fun GameContent(
                                     cornerRadius = CornerRadius(4.dp.toPx())
                                 )
                             }
-                            
-                            // Ghost 限时进度条
+                            // Ghost 进度条
                             if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
                                 val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
                                 drawRect(
@@ -248,7 +222,7 @@ fun GameContent(
                             }
                         }
 
-                        // 护盾指示 (右上角)
+                        // 护盾指示组件
                         if (state.shieldCount > 0) {
                             Surface(
                                 modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
@@ -256,8 +230,9 @@ fun GameContent(
                                 shape = RoundedCornerShape(6.dp),
                                 shadowElevation = 4.dp
                             ) {
-                                Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.Shield, null, Modifier.size(14.dp), tint = Color.White)
+                                    Spacer(Modifier.width(4.dp))
                                     Text("${state.shieldCount}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
@@ -275,7 +250,7 @@ fun GameContent(
     }
 
     if (state.isGameOver) {
-        ResultDialog(state, persistentHS) { onStateChange(SnakeState(highScore = persistentHS, isStarted = true)) }
+        ResultDialog(state) { onStateChange(SnakeState(highScore = state.highScore, isStarted = true)) }
     } else if (state.isPaused) {
         PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
     }
@@ -293,7 +268,6 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                 SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
                 SettingToggle("Ghost Permanent", settings.isGhostPermanent) { onUpdate(settings.copy(isGhostPermanent = it)) }
                 Divider(Modifier.padding(vertical = 8.dp))
-                Text("Item Spawn:", style = MaterialTheme.typography.labelLarge)
                 ItemType.entries.forEach { type ->
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                         Text(type.label, style = MaterialTheme.typography.bodySmall)
@@ -309,10 +283,10 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
     )
 }
 
-fun handleInput(s: SnakeState, x: Float, y: Float): SnakeState {
+fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
     val newDir = when {
-        abs(x) > abs(y) -> if (x > 0 && s.direction != Direction.LEFT) Direction.RIGHT else if (x < 0 && s.direction != Direction.RIGHT) Direction.LEFT else s.direction
-        else -> if (y > 0 && s.direction != Direction.UP) Direction.DOWN else if (y < 0 && s.direction != Direction.DOWN) Direction.UP else s.direction
+        abs(dx) > abs(dy) -> if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT else s.direction
+        else -> if (dy > 0 && s.direction != Direction.UP) Direction.DOWN else if (dy < 0 && s.direction != Direction.DOWN) Direction.UP else s.direction
     }
     return s.copy(direction = newDir)
 }
@@ -326,10 +300,14 @@ fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) ->
 }
 
 @Composable
-fun ResultDialog(state: SnakeState, oldHS: Int, onRestart: () -> Unit) {
+fun ResultDialog(state: SnakeState, onRestart: () -> Unit) {
     AlertDialog(onDismissRequest = {}, confirmButton = { Button(onClick = onRestart) { Text("REPLAY") } },
         title = { Text("Game Over") },
-        text = { Column(Alignment.CenterHorizontally) { Text("${state.score}", fontSize = 48.sp, fontWeight = FontWeight.Bold) } }
+        text = { 
+            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { 
+                Text("${state.score}", fontSize = 48.sp, fontWeight = FontWeight.Bold) 
+            } 
+        }
     )
 }
 
