@@ -9,8 +9,8 @@ import kotlin.random.Random
 object GameConfig {
     const val BASE_SPEED = 150L
     const val MIN_SPEED = 60L
-    const val VERSION = "1.9.2"
-    const val GHOST_DURATION_MS = 15000L // 15秒
+    const val VERSION = "1.9.3"
+    const val GHOST_DURATION_MS = 15000L // 15秒限时
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
@@ -26,6 +26,16 @@ enum class ItemType(val color: Color, val score: Int, val weight: Float, val lab
 
 data class GameObject(val pos: Pair<Int, Int>, val type: ItemType)
 
+data class GameSettings(
+    val showGrid: Boolean = true,
+    val isLoopMode: Boolean = false,
+    val dynamicGrid: Boolean = true,
+    val enableVibration: Boolean = true,
+    val maxObjects: Int = 5,
+    val isGhostPermanent: Boolean = false, // 设置项：Ghost是否永久
+    val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
+)
+
 data class SnakeState(
     val snake: List<Pair<Int, Int>> = listOf(5 to 10, 5 to 11, 5 to 12),
     val objects: List<GameObject> = emptyList(),
@@ -39,19 +49,8 @@ data class SnakeState(
     val gridWidth: Int = 20,
     val gridHeight: Int = 20,
     val speedModifier: Long = 0,
-    // 效果追踪
     val shieldCount: Int = 0,
-    val ghostTimeRemaining: Long = 0L // 剩余毫秒数
-)
-
-data class GameSettings(
-    val showGrid: Boolean = true,
-    val isLoopMode: Boolean = false,
-    val dynamicGrid: Boolean = true,
-    val enableVibration: Boolean = true,
-    val maxObjects: Int = 5,
-    val isGhostPermanent: Boolean = false, // 幽灵效果是否永久
-    val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
+    val ghostTimeRemaining: Long = 0L // 幽灵效果剩余时间
 )
 
 fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): SnakeState {
@@ -69,10 +68,10 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
         else -> head.second 
     }
 
-    // 幽灵状态判断
+    // 幽灵模式判定
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0
 
-    // 边界逻辑
+    // 边界检测
     var hitWall = false
     if (settings.isLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -82,13 +81,13 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
     }
 
     val nH = nX to nY
-    // 自撞逻辑 (幽灵状态下免疫)
+    // 自撞检测 (Ghost开启时免疫)
     val hitSelf = state.snake.contains(nH) && !isGhostActive
 
-    // 护盾逻辑
+    // 死亡与护盾逻辑
     if (hitWall || hitSelf) {
         return if (state.shieldCount > 0) {
-            state.copy(shieldCount = state.shieldCount - 1)
+            state.copy(shieldCount = state.shieldCount - 1) // 消耗护盾，免死一次
         } else {
             state.copy(isGameOver = true)
         }
@@ -99,6 +98,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
     val ic = state.itemsCollected.toMutableMap()
     var sm = state.speedModifier
     var sCount = state.shieldCount
+    // 更新Ghost计时
     var gTime = if (settings.isGhostPermanent) 0L else (state.ghostTimeRemaining - tickDuration).coerceAtLeast(0L)
 
     val hitObject = state.objects.find { it.pos == nH }
@@ -115,6 +115,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
             ItemType.GHOST -> if (!settings.isGhostPermanent) gTime = GameConfig.GHOST_DURATION_MS
             else -> {}
         }
+        
         if (hitObject.type.score <= 0) nS.removeAt(nS.size - 1)
     } else {
         nS.removeAt(nS.size - 1)
