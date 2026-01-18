@@ -67,7 +67,6 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MyTheme {
-                // 在 Composable 顶层获取 Context
                 val context = LocalContext.current
                 var settings by remember { mutableStateOf(loadSettings()) }
                 var showSettings by remember { mutableStateOf(false) }
@@ -108,7 +107,6 @@ class MainActivity : ComponentActivity() {
                                 persistentHS = 0
                                 sp.edit().putInt("hs", 0).apply()
                                 state = state.copy(highScore = 0)
-                                // 调用非 Composable 的普通函数
                                 doVibrate(context, settings.enableVibration, 100L)
                             }, 
                             onStateChange = { newState ->
@@ -143,6 +141,12 @@ fun GameContent(
 ) {
     val currentState by rememberUpdatedState(state)
     var inputLocked by remember { mutableStateOf(false) }
+
+    // --- 核心修复：提前提取主题颜色 ---
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val primaryContainerColor = MaterialTheme.colorScheme.primaryContainer
+    val surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant
+    // ----------------------------
 
     LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
         while (!currentState.isGameOver && !currentState.isPaused && currentState.isStarted) {
@@ -179,7 +183,7 @@ fun GameContent(
                 Box(Modifier
                     .size((cellSize*gridW/density).dp, (cellSize*gridH/density).dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(0.3f))
+                    .background(surfaceVariantColor.copy(0.3f))
                     .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
                         if (state.isStarted && !state.isPaused && !state.isGameOver) {
                             detectDragGestures(onDragStart={inputLocked=false}, onDrag={c, d -> 
@@ -206,7 +210,13 @@ fun GameContent(
                         val isPermMagnet = (state.cumulativeCounts[ItemType.MAGNET] ?: 0) >= (settings.permThresholds[ItemType.MAGNET] ?: Int.MAX_VALUE)
                         
                         state.snake.forEachIndexed { i, p ->
-                            val color = if (settings.useGradient) lerp(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primaryContainer, i.toFloat()/state.snake.size) else MaterialTheme.colorScheme.primary
+                            // 使用提前提取的颜色变量
+                            val color = if (settings.useGradient) {
+                                lerp(primaryColor, primaryContainerColor, i.toFloat()/state.snake.size)
+                            } else {
+                                primaryColor
+                            }
+                            
                             val alpha = if (settings.usePulse && (state.ghostTicks > 0 || isPermGhost)) pulse else 1f
                             
                             drawRoundRect(
@@ -217,12 +227,9 @@ fun GameContent(
                                 alpha = alpha
                             )
                             
-                            // 磁铁吸附特效：蛇头红蓝双色呼吸圈
                             if (i == 0 && (state.magnetTicks > 0 || isPermMagnet)) {
                                 val r = cellSize * 0.45f * pulse
-                                // 左侧红色磁极
                                 drawCircle(Color.Red.copy(0.45f * pulse), r, Offset(p.first * cellSize, p.second * cellSize + cellSize / 2))
-                                // 右侧蓝色磁极
                                 drawCircle(Color.Blue.copy(0.45f * pulse), r, Offset(p.first * cellSize + cellSize, p.second * cellSize + cellSize / 2))
                             }
                         }
@@ -246,7 +253,7 @@ fun GameContent(
     }
 }
 
-// --- 辅助工具 (普通函数，严禁标记为 @Composable) ---
+// --- 辅助工具 (普通函数) ---
 
 fun handleLogicInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
     if (abs(dx) < 15f && abs(dy) < 15f) return s
@@ -262,9 +269,6 @@ fun handleLogicInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
     return s.copy(direction = newDir)
 }
 
-/**
- * 执行震动。这是一个普通函数，可以安全地在 onClick 等回调中运行。
- */
 fun doVibrate(context: Context, enabled: Boolean, durationMillis: Long) {
     if (!enabled) return
     val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
