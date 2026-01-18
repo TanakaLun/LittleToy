@@ -9,12 +9,11 @@ import kotlin.random.Random
 object GameConfig {
     const val BASE_SPEED = 150L
     const val MIN_SPEED = 60L
-    const val VERSION = "1.9.1"
+    const val VERSION = "1.9.5"
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 
-// 为道具添加对应的 Icon
 enum class ItemType(val color: Color, val score: Int, val weight: Float, val label: String, val icon: ImageVector) {
     FOOD_BASIC(Color(0xFF4CAF50), 10, 0.7f, "Basic", Icons.Default.Fastfood),
     FOOD_GOLD(Color(0xFFFFD700), 30, 0.15f, "Gold", Icons.Default.Star),
@@ -38,7 +37,10 @@ data class SnakeState(
     val itemsCollected: Map<ItemType, Int> = emptyMap(),
     val gridWidth: Int = 20,
     val gridHeight: Int = 20,
-    val speedModifier: Long = 0
+    val speedModifier: Long = 0,
+    // 道具状态
+    val ghostTicks: Int = 0,
+    val hasShield: Boolean = false
 )
 
 data class GameSettings(
@@ -47,7 +49,6 @@ data class GameSettings(
     val dynamicGrid: Boolean = true,
     val enableVibration: Boolean = true,
     val maxObjects: Int = 5,
-    // 控制每种道具是否允许生成
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
@@ -66,21 +67,40 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         else -> head.second 
     }
 
+    // 1. 处理边界检查
+    var isCollision = false
     if (settings.isLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
         nY = (nY + state.gridHeight) % state.gridHeight
     } else if (nX !in 0 until state.gridWidth || nY !in 0 until state.gridHeight) {
-        return state.copy(isGameOver = true)
+        isCollision = true
     }
 
     val nH = nX to nY
-    if (state.snake.contains(nH)) return state.copy(isGameOver = true)
+    
+    // 2. 处理身体碰撞 (Ghost 状态下忽略身体碰撞)
+    if (state.snake.contains(nH) && state.ghostTicks <= 0) {
+        isCollision = true
+    }
+
+    // 3. 护盾逻辑拦截死亡
+    if (isCollision) {
+        return if (state.hasShield) {
+            // 消耗护盾，免死一回合（此时蛇不动，给玩家反应时间改变方向）
+            state.copy(hasShield = false) 
+        } else {
+            state.copy(isGameOver = true)
+        }
+    }
 
     val nS = state.snake.toMutableList().apply { add(0, nH) }
     var sc = state.score
     val ic = state.itemsCollected.toMutableMap()
     var sm = state.speedModifier
+    var gs = (state.ghostTicks - 1).coerceAtLeast(0)
+    var activeShield = state.hasShield
 
+    // 4. 处理道具碰撞
     val hitObject = state.objects.find { it.pos == nH }
     val remainingObjects = state.objects.toMutableList()
     
@@ -88,24 +108,26 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         remainingObjects.remove(hitObject)
         sc += hitObject.type.score
         ic[hitObject.type] = (ic[hitObject.type] ?: 0) + 1
-        if (hitObject.type == ItemType.SLOW) sm += 15
+        
+        when(hitObject.type) {
+            ItemType.SLOW -> sm += 15
+            ItemType.GHOST -> gs = 20 // 持续20步
+            ItemType.SHIELD -> activeShield = true
+            else -> {}
+        }
+        
         if (hitObject.type.score <= 0) nS.removeAt(nS.size - 1)
     } else {
         nS.removeAt(nS.size - 1)
     }
 
-    // 只生成被勾选的道具
-    val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
-    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.15f && allowedTypes.isNotEmpty()) {
-        val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
-        if (!nS.contains(newPos) && remainingObjects.none { it.pos == newPos }) {
-            val totalWeight = allowedTypes.sumOf { it.weight.toDouble() }
-            val r = Random.nextDouble() * totalWeight
-            var acc = 0.0
-            val selectedType = allowedTypes.first { acc += it.weight; r <= acc }
-            remainingObjects.add(GameObject(newPos, selectedType))
-        }
-    }
-
-    return state.copy(snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), itemsCollected = ic, speedModifier = sm)
+    return state.copy(
+        snake = nS, 
+        objects = remainingObjects, 
+        score = sc.coerceAtLeast(0), 
+        itemsCollected = ic, 
+        speedModifier = sm,
+        ghostTicks = gs,
+        hasShield = activeShield
+    )
 }

@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -29,7 +30,6 @@ import androidx.compose.ui.unit.sp
 import io.tl.snake.logic.*
 import io.tl.snake.ui.theme.MyTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.random.Random
@@ -40,7 +40,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val sp = getSharedPreferences("snake_prefs", Context.MODE_PRIVATE)
 
-        // Helper to trigger vibration globally
         fun triggerVibration(context: Context, enabled: Boolean, duration: Long = 50L) {
             if (!enabled) return
             val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
@@ -56,9 +55,8 @@ class MainActivity : ComponentActivity() {
             val jsonStr = sp.getString("settings", null) ?: return GameSettings()
             return try {
                 val json = JSONObject(jsonStr)
-                val itemsJson = json.optJSONObject("enabledItems")
                 val itemMap = ItemType.entries.associateWith { type ->
-                    itemsJson?.optBoolean(type.name, true) ?: true
+                    json.optJSONObject("enabledItems")?.optBoolean(type.name, true) ?: true
                 }
                 GameSettings(
                     showGrid = json.optBoolean("showGrid", true),
@@ -104,7 +102,7 @@ class MainActivity : ComponentActivity() {
                                         state = state.copy(isPaused = !state.isPaused)
                                         triggerVibration(context, settings.enableVibration, 20L)
                                     }) {
-                                        Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = null)
+                                        Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
                                     }
                                 }
                                 IconButton(onClick = { 
@@ -116,21 +114,15 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(
-                            state = state, 
-                            settings = settings, 
-                            persistentHS = persistentHS, 
+                        GameContent(state, settings, persistentHS, 
                             onHSReset = { 
                                 persistentHS = 0
                                 sp.edit().putInt("hs", 0).apply()
                                 state = state.copy(highScore = 0)
-                                triggerVibration(context, settings.enableVibration, 100L)
+                                triggerVibration(context, settings.enableVibration, 80L)
                             },
                             onStateChange = { 
-                                // Trigger haptic on direction change
-                                if (it.direction != state.direction) {
-                                    triggerVibration(context, settings.enableVibration, 15L)
-                                }
+                                if (it.direction != state.direction) triggerVibration(context, settings.enableVibration, 10L)
                                 state = it 
                             }
                         )
@@ -145,15 +137,12 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(state.isGameOver) {
                     if (state.isGameOver) {
+                        val duration = if (state.score > persistentHS) 300L else 100L
                         if (state.score > persistentHS) {
                             persistentHS = state.score
                             sp.edit().putInt("hs", state.score).apply()
-                            // Strong vibration for new record
-                            triggerVibration(context, settings.enableVibration, 300L)
-                        } else {
-                            // Normal vibration for game over
-                            triggerVibration(context, settings.enableVibration, 100L)
                         }
+                        triggerVibration(context, settings.enableVibration, duration)
                     }
                 }
             }
@@ -185,16 +174,11 @@ fun GameContent(
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            // Status Bar
+            // 顶部 Chip 栏
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Surface(
-                    modifier = Modifier
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .combinedClickable(
-                            onClick = { },
-                            onLongClick = onHSReset
-                        ),
+                    modifier = Modifier.height(48.dp).clip(RoundedCornerShape(12.dp))
+                        .combinedClickable(onClick = {}, onLongClick = onHSReset),
                     color = colorScheme.secondaryContainer,
                     shape = RoundedCornerShape(12.dp)
                 ) {
@@ -214,15 +198,11 @@ fun GameContent(
                     Text("$speedRatio/100", fontWeight = FontWeight.Black, color = colorScheme.tertiary)
                 }
 
-                InputChip(
-                    selected = true,
-                    onClick = {},
-                    label = { Text("${state.score}", fontWeight = FontWeight.Bold) },
-                    leadingIcon = { Icon(Icons.Default.Score, null, Modifier.size(18.dp)) }
-                )
+                InputChip(selected = true, onClick = {}, label = { Text("${state.score}", fontWeight = FontWeight.Bold) },
+                    leadingIcon = { Icon(Icons.Default.Score, null, Modifier.size(18.dp)) })
             }
 
-            // Board Area
+            // 画布
             BoxWithConstraints(Modifier.fillMaxSize().weight(1f).padding(20.dp)) {
                 val density = LocalContext.current.resources.displayMetrics.density
                 val cellBasePx = 22f * density
@@ -233,16 +213,13 @@ fun GameContent(
                 val dH = cellSizePx * gridH
 
                 LaunchedEffect(gridW, gridH) {
-                    if (state.gridWidth != gridW || state.gridHeight != gridH) {
+                    if (state.gridWidth != gridW || state.gridHeight != gridH) 
                         onStateChange(state.copy(gridWidth = gridW, gridHeight = gridH))
-                    }
                 }
 
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Box(
-                        modifier = Modifier
-                            .size((dW / density).dp, (dH / density).dp)
-                            .clip(RoundedCornerShape(16.dp))
+                        modifier = Modifier.size((dW / density).dp, (dH / density).dp).clip(RoundedCornerShape(16.dp))
                             .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
                             .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
                                 if (state.isStarted && !state.isPaused && !state.isGameOver) {
@@ -253,23 +230,34 @@ fun GameContent(
                                 }
                             }
                     ) {
-                        val dimAlpha by animateFloatAsState(if (!state.isStarted) 0.8f else 0f)
-                        Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = 1f - dimAlpha)) {
+                        Canvas(Modifier.fillMaxSize()) {
                             if (settings.showGrid) {
                                 for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, dH))
                                 for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(dW, i * cellSizePx))
                             }
                             state.objects.forEach { obj ->
-                                drawCircle(obj.type.color, cellSizePx / 3f, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
+                                drawCircle(obj.type.color, cellSizePx / 3.5f, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
                             }
+                            // 蛇身渐变绘制
                             state.snake.forEachIndexed { i, p ->
-                                val color = if (i == 0) colorScheme.primary else colorScheme.primary.copy(alpha = 0.6f)
-                                drawRoundRect(color, Offset(p.first * cellSizePx + 1f, p.second * cellSizePx + 1f), Size(cellSizePx - 2f, cellSizePx - 2f), CornerRadius(6.dp.toPx()))
+                                // 基础颜色：头部深色，尾部变淡
+                                val fraction = i.toFloat() / state.snake.size.coerceAtLeast(1)
+                                var cellColor = lerp(colorScheme.primary, colorScheme.primaryContainer, fraction)
+                                
+                                // 道具状态视觉反馈
+                                if (state.ghostTicks > 0) cellColor = cellColor.copy(alpha = 0.4f)
+                                if (state.hasShield && i == 0) cellColor = Color.Cyan 
+
+                                drawRoundRect(
+                                    color = cellColor, 
+                                    topLeft = Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f), 
+                                    size = Size(cellSizePx - 3f, cellSizePx - 3f), 
+                                    cornerRadius = CornerRadius(4.dp.toPx())
+                                )
                             }
                         }
-
                         if (!state.isStarted) {
-                            Button(onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) }, modifier = Modifier.align(Alignment.Center)) {
+                            Button(onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) }, Modifier.align(Alignment.Center)) {
                                 Text("START GAME")
                             }
                         }
@@ -277,55 +265,52 @@ fun GameContent(
                 }
             }
         }
-
-        // --- Celebration Overlay ---
-        if (isNewRecord) {
-            ConfettiEffect()
-        }
+        if (isNewRecord) ConfettiEffect()
     }
+    
+    if (state.isGameOver) ResultDialog(state, persistentHS) { 
+        onStateChange(SnakeState(highScore = persistentHS, isStarted = true, gridWidth = state.gridWidth, gridHeight = state.gridHeight)) 
+    } else if (state.isPaused) PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
+}
 
-    if (state.isGameOver) {
-        ResultDialog(state, persistentHS) { 
-            onStateChange(SnakeState(highScore = persistentHS, isStarted = true, gridWidth = state.gridWidth, gridHeight = state.gridHeight)) 
-        }
-    } else if (state.isPaused) {
-        PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
+// 修改手势逻辑，解决斜向滑动死机
+fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
+    if (abs(dx) < 10f && abs(dy) < 10f) return s
+    val newDir = if (abs(dx) > abs(dy)) {
+        if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT 
+        else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT else s.direction
+    } else {
+        if (dy > 0 && s.direction != Direction.UP) Direction.DOWN 
+        else if (dy < 0 && s.direction != Direction.DOWN) Direction.UP else s.direction
     }
+    return s.copy(direction = newDir)
 }
 
 @Composable
 fun ConfettiEffect() {
-    val particles = remember { List(50) { ConfettiParticle() } }
-    val infiniteTransition = rememberInfiniteTransition()
+    val particles = remember { List(60) { ConfettiParticle() } }
+    val infiniteTransition = rememberInfiniteTransition(label = "confetti")
     val progress by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing))
+        animationSpec = infiniteRepeatable(tween(2500, easing = LinearEasing))
     )
-
     Canvas(Modifier.fillMaxSize()) {
         particles.forEach { p ->
-            val y = (p.startY + (progress * 1500f * p.speed)) % size.height
+            val y = (p.startY + (progress * size.height * 1.5f * p.speed)) % size.height
             val x = p.startX + (progress * 200f * p.drift)
-            drawRect(
-                color = p.color,
-                topLeft = Offset(x, y),
-                size = Size(15f, 30f),
-                alpha = 1f - (y / size.height).coerceIn(0f, 1f)
-            )
+            drawRect(color = p.color, topLeft = Offset(x, y), size = Size(12f, 24f), alpha = 1f - (y/size.height))
         }
     }
 }
 
 class ConfettiParticle {
-    val startX = Random.nextFloat() * 1000f
+    val startX = Random.nextFloat() * 2000f
     val startY = -Random.nextFloat() * 1000f
-    val speed = Random.nextFloat() * 0.5f + 0.5f
+    val speed = Random.nextFloat() * 0.4f + 0.6f
     val drift = Random.nextFloat() * 2f - 1f
     val color = Color(Random.nextFloat(), Random.nextFloat(), Random.nextFloat(), 1f)
 }
 
-// ... Rest of the helper components (SettingsDialog, StatsList, ResultDialog, etc.) ...
-// ensure SettingsDialog button is a Button as requested
 @Composable
 fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
     AlertDialog(
