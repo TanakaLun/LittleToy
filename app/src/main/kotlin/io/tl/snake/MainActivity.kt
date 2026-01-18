@@ -99,6 +99,14 @@ class MainActivity : ComponentActivity() {
                         CenterAlignedTopAppBar(
                             title = { Text("SNAKE EVO", fontWeight = FontWeight.Black) },
                             actions = {
+                                if (state.isStarted && !state.isGameOver) {
+                                    IconButton(onClick = { 
+                                        state = state.copy(isPaused = !state.isPaused)
+                                        triggerVibration(context, settings.enableVibration, 20L)
+                                    }) {
+                                        Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = null)
+                                    }
+                                }
                                 IconButton(onClick = { 
                                     if (state.isStarted && !state.isGameOver) state = state.copy(isPaused = true)
                                     showSettings = true 
