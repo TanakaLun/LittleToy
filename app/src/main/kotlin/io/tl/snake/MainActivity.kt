@@ -5,11 +5,12 @@ import android.os.*
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -19,41 +20,68 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.tl.snake.logic.*
 import io.tl.snake.ui.theme.MyTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val sp = getSharedPreferences("snake_v2", Context.MODE_PRIVATE)
+        val sp = getSharedPreferences("snake_prefs", Context.MODE_PRIVATE)
+
+        fun triggerVibration(context: Context, enabled: Boolean, duration: Long = 50L) {
+            if (!enabled) return
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(duration)
+            }
+        }
 
         fun loadSettings(): GameSettings {
             val jsonStr = sp.getString("settings", null) ?: return GameSettings()
             return try {
                 val json = JSONObject(jsonStr)
-                val itemMap = ItemType.entries.associateWith { json.optJSONObject("enabledItems")?.optBoolean(it.name, true) ?: true }
-                val thresholdMap = ItemType.entries.filter { it.canPermanent }.associateWith { json.optJSONObject("thresholds")?.optInt(it.name, 10) ?: 10 }
-                GameSettings(json.optBoolean("showGrid", true), json.optBoolean("isLoopMode", false), json.optBoolean("dynamicGrid", true), json.optBoolean("enableVibration", true), json.optInt("maxObjects", 5), itemMap, thresholdMap)
+                val itemsJson = json.optJSONObject("enabledItems")
+                val itemMap = ItemType.entries.associateWith { type ->
+                    itemsJson?.optBoolean(type.name, true) ?: true
+                }
+                GameSettings(
+                    showGrid = json.optBoolean("showGrid", true),
+                    isLoopMode = json.optBoolean("isLoopMode", false),
+                    dynamicGrid = json.optBoolean("dynamicGrid", true),
+                    enableVibration = json.optBoolean("enableVibration", true),
+                    maxObjects = json.optInt("maxObjects", 5),
+                    isGhostPermanent = json.optBoolean("isGhostPermanent", false),
+                    enabledItems = itemMap
+                )
             } catch (e: Exception) { GameSettings() }
         }
 
         fun saveSettings(s: GameSettings) {
             val json = JSONObject().apply {
-                put("showGrid", s.showGrid); put("isLoopMode", s.isLoopMode); put("dynamicGrid", s.dynamicGrid); put("enableVibration", s.enableVibration); put("maxObjects", s.maxObjects)
-                put("enabledItems", JSONObject().apply { s.enabledItems.forEach { (k, v) -> put(k.name, v) } })
-                put("thresholds", JSONObject().apply { s.thresholds.forEach { (k, v) -> put(k.name, v) } })
+                put("showGrid", s.showGrid)
+                put("isLoopMode", s.isLoopMode)
+                put("dynamicGrid", s.dynamicGrid)
+                put("enableVibration", s.enableVibration)
+                put("maxObjects", s.maxObjects)
+                put("isGhostPermanent", s.isGhostPermanent)
+                put("enabledItems", JSONObject().apply {
+                    s.enabledItems.forEach { (k, v) -> put(k.name, v) }
+                })
             }
             sp.edit().putString("settings", json.toString()).apply()
         }
@@ -65,141 +93,429 @@ class MainActivity : ComponentActivity() {
                 var showSettings by remember { mutableStateOf(false) }
                 var persistentHS by remember { mutableStateOf(sp.getInt("hs", 0)) }
                 var state by remember { mutableStateOf(SnakeState(highScore = persistentHS)) }
-                
+                val context = LocalContext.current
+
                 Scaffold(
                     topBar = {
                         CenterAlignedTopAppBar(
-                            title = { Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 16.sp)
-                                if (state.permanentEffects.isNotEmpty()) Row { state.permanentEffects.forEach { Icon(it.icon, null, Modifier.size(12.dp), tint = it.color) } }
-                            }},
+                            title = { 
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // 左侧分数列
+                                    Column(horizontalAlignment = Alignment.Start, modifier = Modifier.padding(end = 12.dp)) {
+                                        Text("HI: ${if(state.score > persistentHS) state.score else persistentHS}", 
+                                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                        Text("SC: ${state.score}", 
+                                            style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                    Text("SNAKE EVO", fontWeight = FontWeight.Black) 
+                                }
+                            },
                             actions = {
-                                IconButton(onClick = { if (state.isStarted && !state.isGameOver) state = state.copy(isPaused = !state.isPaused) }) { Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null) }
-                                IconButton(onClick = { showSettings = true; state = state.copy(isPaused = true) }) { Icon(Icons.Default.Settings, null) }
+                                if (state.isStarted && !state.isGameOver) {
+                                    IconButton(onClick = { 
+                                        state = state.copy(isPaused = !state.isPaused)
+                                        triggerVibration(context, settings.enableVibration, 20L)
+                                    }) {
+                                        Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = null)
+                                    }
+                                }
+                                IconButton(onClick = { 
+                                    if (state.isStarted && !state.isGameOver) state = state.copy(isPaused = true)
+                                    showSettings = true 
+                                }) { Icon(Icons.Default.Settings, null) }
                             }
                         )
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(state, settings, persistentHS, onHSReset = { persistentHS = 0; sp.edit().putInt("hs", 0).apply(); state = state.copy(highScore = 0) }, onStateChange = { state = it })
-                        if (showSettings) SettingsDialog(settings, onDismiss = { showSettings = false }) { settings = it; saveSettings(it) }
+                        GameContent(
+                            state = state, 
+                            settings = settings, 
+                            persistentHS = persistentHS, 
+                            onHSReset = { 
+                                persistentHS = 0
+                                sp.edit().putInt("hs", 0).apply()
+                                state = state.copy(highScore = 0)
+                                triggerVibration(context, settings.enableVibration, 100L)
+                            },
+                            onStateChange = { 
+                                if (it.direction != state.direction) {
+                                    triggerVibration(context, settings.enableVibration, 15L)
+                                }
+                                state = it 
+                            }
+                        )
+                        if (showSettings) {
+                            SettingsDialog(settings, onDismiss = { showSettings = false }) {
+                                settings = it
+                                saveSettings(it)
+                            }
+                        }
                     }
                 }
-                LaunchedEffect(state.isGameOver) { if (state.isGameOver && state.score > persistentHS) { persistentHS = state.score; sp.edit().putInt("hs", state.score).apply() } }
+
+                LaunchedEffect(state.isGameOver) {
+                    if (state.isGameOver) {
+                        if (state.score > persistentHS) {
+                            persistentHS = state.score
+                            sp.edit().putInt("hs", state.score).apply()
+                            triggerVibration(context, settings.enableVibration, 300L)
+                        } else {
+                            triggerVibration(context, settings.enableVibration, 100L)
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, onHSReset: () -> Unit, onStateChange: (SnakeState) -> Unit) {
-    val colorScheme = MaterialTheme.colorScheme; val currentState by rememberUpdatedState(state)
-    val speed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
+fun GameContent(
+    state: SnakeState, 
+    settings: GameSettings, 
+    persistentHS: Int, 
+    onHSReset: () -> Unit,
+    onStateChange: (SnakeState) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val currentState by rememberUpdatedState(state)
+    val isNewRecord = state.isGameOver && state.score > state.highScore
+
+    val currentSpeed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
     
     LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
-        while (!currentState.isGameOver && !currentState.isPaused && currentState.isStarted) { delay(speed); onStateChange(gameTick(currentState, settings)) }
+        while (!currentState.isGameOver && !currentState.isPaused && currentState.isStarted) {
+            delay(currentSpeed)
+            onStateChange(gameTick(currentState, settings, currentSpeed))
+        }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-            InfoChip("BEST", "${maxOf(state.score, persistentHS)}", Icons.Default.EmojiEvents, colorScheme.tertiary)
-            InfoChip("SCORE", "${state.score}", Icons.Default.Score, colorScheme.primary)
-        }
-        BoxWithConstraints(Modifier.weight(1f).padding(vertical = 16.dp)) {
-            val d = LocalContext.current.resources.displayMetrics.density
-            val gW = if (settings.dynamicGrid) (constraints.maxWidth / (22 * d)).toInt().coerceIn(10, 30) else state.gridWidth
-            val gH = if (settings.dynamicGrid) (constraints.maxHeight / (22 * d)).toInt().coerceIn(10, 45) else state.gridHeight
-            val cellSize = minOf(constraints.maxWidth.toFloat() / gW, constraints.maxHeight.toFloat() / gH)
-            
-            LaunchedEffect(gW, gH) { if (state.gridWidth != gW || state.gridHeight != gH) onStateChange(state.copy(gridWidth = gW, gridHeight = gH)) }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            // 原有的顶部状态栏 (保持美观)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                val speedRatio = ((GameConfig.BASE_SPEED - currentSpeed).toFloat() / (GameConfig.BASE_SPEED - GameConfig.MIN_SPEED) * 100).toInt().coerceIn(0, 100)
+                Text("SPEED: $speedRatio%", style = MaterialTheme.typography.labelLarge, color = colorScheme.secondary, fontWeight = FontWeight.Bold)
+                
+                if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
+                    Text("GHOST ACTIVE", style = MaterialTheme.typography.labelSmall, color = ItemType.GHOST.color, fontWeight = FontWeight.Bold)
+                }
+            }
 
-            Box(Modifier.size((cellSize * gW / d).dp, (cellSize * gH / d).dp).clip(RoundedCornerShape(12.dp)).background(colorScheme.surfaceVariant.copy(0.3f))
-                .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
-                    var acc = Offset.Zero
-                    detectDragGestures(onDragStart = { acc = Offset.Zero }) { change, drag ->
-                        change.consume(); acc += drag
-                        if (abs(acc.x) > 40f || abs(acc.y) > 40f) {
-                            val newDir = if (abs(acc.x) > abs(acc.y)) (if (acc.x > 0 && state.direction != Direction.LEFT) Direction.RIGHT else if (acc.x < 0 && state.direction != Direction.RIGHT) Direction.LEFT else state.direction)
-                            else (if (acc.y > 0 && state.direction != Direction.UP) Direction.DOWN else if (acc.y < 0 && state.direction != Direction.DOWN) Direction.UP else state.direction)
-                            if (newDir != state.direction) { onStateChange(state.copy(direction = newDir)); acc = Offset.Zero }
+            // 棋盘区域
+            BoxWithConstraints(Modifier.fillMaxSize().weight(1f).padding(20.dp)) {
+                val density = LocalContext.current.resources.displayMetrics.density
+                val cellBasePx = 22f * density
+                val gridW = if (settings.dynamicGrid) (constraints.maxWidth / cellBasePx).toInt().coerceIn(10, 30) else 20
+                val gridH = if (settings.dynamicGrid) (constraints.maxHeight / cellBasePx).toInt().coerceIn(10, 45) else 20
+                val cellSizePx = (constraints.maxWidth.toFloat() / gridW).coerceAtMost(constraints.maxHeight.toFloat() / gridH)
+                val dW = cellSizePx * gridW
+                val dH = cellSizePx * gridH
+
+                LaunchedEffect(gridW, gridH) {
+                    if (state.gridWidth != gridW || state.gridHeight != gridH) {
+                        onStateChange(state.copy(gridWidth = gridW, gridHeight = gridH))
+                    }
+                }
+
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size((dW / density).dp, (dH / density).dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
+                                if (state.isStarted && !state.isPaused && !state.isGameOver) {
+                                    detectDragGestures { change, drag ->
+                                        change.consume()
+                                        onStateChange(handleInput(currentState, drag.x, drag.y))
+                                    }
+                                }
+                            }
+                    ) {
+                        val dimAlpha by animateFloatAsState(if (!state.isStarted) 0.8f else 0f)
+                        Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = 1f - dimAlpha)) {
+                            // 绘制网格
+                            if (settings.showGrid) {
+                                for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, dH))
+                                for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(dW, i * cellSizePx))
+                            }
+                            // 绘制道具
+                            state.objects.forEach { obj ->
+                                drawCircle(obj.type.color, cellSizePx / 3f, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
+                            }
+                            // 绘制蛇 (层次感设计)
+                            state.snake.forEachIndexed { i, p ->
+                                val baseColor = when {
+                                    i == 0 && (state.ghostTimeRemaining > 0 || settings.isGhostPermanent) -> ItemType.GHOST.color
+                                    i == 0 && state.shieldCount > 0 -> ItemType.SHIELD.color
+                                    i == 0 -> colorScheme.primary
+                                    else -> colorScheme.primary
+                                }
+                                // 计算层次透明度：头部 1.0，尾部逐渐变淡
+                                val alpha = (1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)
+                                
+                                drawRoundRect(
+                                    color = baseColor.copy(alpha = alpha), 
+                                    topLeft = Offset(p.first * cellSizePx + 1f, p.second * cellSizePx + 1f), 
+                                    size = Size(cellSizePx - 2f, cellSizePx - 2f), 
+                                    cornerRadius = CornerRadius(6.dp.toPx())
+                                )
+                            }
+
+                            // 动态进度条 (Ghost 剩余时间)
+                            if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
+                                val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
+                                val barWidth = dW * 0.8f
+                                val barHeight = 4.dp.toPx()
+                                drawRoundRect(
+                                    color = ItemType.GHOST.color.copy(alpha = 0.3f),
+                                    topLeft = Offset((dW - barWidth) / 2, dH - 20.dp.toPx()),
+                                    size = Size(barWidth, barHeight),
+                                    cornerRadius = CornerRadius(barHeight / 2)
+                                )
+                                drawRoundRect(
+                                    color = ItemType.GHOST.color,
+                                    topLeft = Offset((dW - barWidth) / 2, dH - 20.dp.toPx()),
+                                    size = Size(barWidth * progress, barHeight),
+                                    cornerRadius = CornerRadius(barHeight / 2)
+                                )
+                            }
+                        }
+
+                        // 护盾指示组件 (右上角)
+                        if (state.shieldCount > 0) {
+                            Surface(
+                                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                                color = ItemType.SHIELD.color,
+                                shape = RoundedCornerShape(8.dp),
+                                shadowElevation = 4.dp
+                            ) {
+                                Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(ItemType.SHIELD.icon, null, Modifier.size(16.dp), tint = Color.White)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("x${state.shieldCount}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                }
+                            }
+                        }
+
+                        if (!state.isStarted) {
+                            Button(onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) }, modifier = Modifier.align(Alignment.Center)) {
+                                Text("START GAME")
+                            }
                         }
                     }
                 }
-            ) {
-                Canvas(Modifier.fillMaxSize()) {
-                    if (settings.showGrid) {
-                        for (i in 0..gW) drawLine(Color.Gray.copy(0.1f), Offset(i * cellSize, 0f), Offset(i * cellSize, gH * cellSize))
-                        for (i in 0..gH) drawLine(Color.Gray.copy(0.1f), Offset(0f, i * cellSize), Offset(gW * cellSize, i * cellSize))
-                    }
-                    state.objects.forEach { drawCircle(it.type.color, cellSize / 3f, Offset(it.pos.first * cellSize + cellSize / 2f, it.pos.second * cellSize + cellSize / 2f)) }
-                    state.snake.forEachIndexed { i, p ->
-                        val color = if (state.permanentEffects.contains(ItemType.GHOST) || state.ghostTicks > 0) colorScheme.primary.copy(0.4f)
-                        else if (state.permanentEffects.contains(ItemType.SHIELD) && i == 0) Color.Cyan else lerp(colorScheme.primary, colorScheme.outline, i.toFloat() / state.snake.size.coerceAtLeast(1))
-                        drawRoundRect(color, Offset(p.first * cellSize + 1f, p.second * cellSize + 1f), Size(cellSize - 2f, cellSize - 2f), CornerRadius(4 * d))
-                    }
-                }
-                if (!state.isStarted) Button(onClick = { onStateChange(state.copy(isStarted = true, isPaused = false)) }, Modifier.align(Alignment.Center)) { Text("START") }
             }
         }
+
+        if (isNewRecord) { ConfettiEffect() }
     }
-    // 处理弹窗逻辑
+
     if (state.isGameOver) {
-        ResultDialog(state) { onStateChange(SnakeState(highScore = state.highScore, isStarted = true, gridWidth = state.gridWidth, gridHeight = state.gridHeight)) }
+        ResultDialog(state, persistentHS) { 
+            onStateChange(SnakeState(highScore = persistentHS, isStarted = true, gridWidth = state.gridWidth, gridHeight = state.gridHeight)) 
+        }
     } else if (state.isPaused) {
         PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
     }
 }
 
-@Composable fun PauseStatsDialog(state: SnakeState, onResume: () -> Unit) {
-    AlertDialog(onDismissRequest = onResume, confirmButton = { Button(onClick = onResume) { Text("RESUME") } },
-        title = { Text("Paused") },
+@Composable
+fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+                Icon(Icons.Default.Check, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Apply Settings")
+            }
+        },
+        title = { Text("Configuration", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ItemType.entries.forEach { type ->
-                    val count = state.itemsCollected[type] ?: 0
-                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                        Row { Icon(type.icon, null, Modifier.size(18.dp), tint = type.color); Spacer(Modifier.width(8.dp)); Text(type.label) }
-                        Text("$count", fontWeight = FontWeight.Bold)
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                SettingSection("General") {
+                    SettingToggle("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
+                    SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
+                    SettingToggle("Haptic Feedback", settings.enableVibration) { onUpdate(settings.copy(enableVibration = it)) }
+                }
+                SettingSection("Abilities") {
+                    SettingToggle("Ghost Permanent", settings.isGhostPermanent) { onUpdate(settings.copy(isGhostPermanent = it)) }
+                }
+                SettingSection("Item Spawning") {
+                    ItemType.entries.forEach { type ->
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(type.icon, null, Modifier.size(20.dp), tint = type.color)
+                                Spacer(Modifier.width(12.dp))
+                                Text(type.label)
+                            }
+                            Checkbox(checked = settings.enabledItems[type] == true, onCheckedChange = { isChecked ->
+                                val newMap = settings.enabledItems.toMutableMap()
+                                newMap[type] = isChecked
+                                onUpdate(settings.copy(enabledItems = newMap))
+                            })
+                        }
                     }
+                }
+                SettingSection("Difficulty") {
+                    Text("Max Items: ${settings.maxObjects}")
+                    Slider(value = settings.maxObjects.toFloat(), onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }, valueRange = 1f..10f)
                 }
             }
         }
     )
 }
 
-@Composable fun InfoChip(l: String, v: String, i: ImageVector, c: Color) {
-    Surface(color = c.copy(0.1f), shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, c.copy(0.2f))) {
-        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(i, null, Modifier.size(16.dp), tint = c); Spacer(Modifier.width(4.dp))
-            Column { Text(l, fontSize = 10.sp); Text(v, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+@Composable
+fun ConfettiEffect() {
+    val particles = remember { List(50) { ConfettiParticle() } }
+    val infiniteTransition = rememberInfiniteTransition()
+    val progress by infiniteTransition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing))
+    )
+
+    Canvas(Modifier.fillMaxSize()) {
+        particles.forEach { p ->
+            val y = (p.startY + (progress * 1500f * p.speed)) % size.height
+            val x = p.startX + (progress * 200f * p.drift)
+            drawRect(
+                color = p.color,
+                topLeft = Offset(x, y),
+                size = Size(15f, 30f),
+                alpha = 1f - (y / size.height).coerceIn(0f, 1f)
+            )
         }
     }
 }
 
-@Composable fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, confirmButton = { TextButton(onClick = onDismiss) { Text("CLOSE") } },
-        title = { Text("Configuration") },
+class ConfettiParticle {
+    val startX = Random.nextFloat() * 1000f
+    val startY = -Random.nextFloat() * 1000f
+    val speed = Random.nextFloat() * 0.5f + 0.5f
+    val drift = Random.nextFloat() * 2f - 1f
+    val color = Color(Random.nextFloat(), Random.nextFloat(), Random.nextFloat(), 1f)
+}
+
+// ... Rest of the helper components (SettingsDialog, StatsList, ResultDialog, etc.) ...
+// ensure SettingsDialog button is a Button as requested
+@Composable
+fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(onClick = onDismiss, shape = RoundedCornerShape(12.dp)) {
+                Icon(Icons.Default.Check, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Apply Settings")
+            }
+        },
+        title = { Text("Configuration", fontWeight = FontWeight.Bold) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
-                HorizontalDivider()
-                Text("Permanent Thresholds (Collect Count)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                ItemType.entries.filter { it.canPermanent }.forEach { type ->
-                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                        Row(verticalAlignment = Alignment.CenterVertically) { Icon(type.icon, null, Modifier.size(16.dp), tint = type.color); Spacer(Modifier.width(8.dp)); Text(type.label, fontSize = 14.sp) }
-                        var txt by remember { mutableStateOf(settings.thresholds[type]?.toString() ?: "10") }
-                        OutlinedTextField(value = txt, onValueChange = { txt = it; it.toIntOrNull()?.let { v -> val m = settings.thresholds.toMutableMap(); m[type] = v.coerceAtLeast(0); onUpdate(settings.copy(thresholds = m)) } }, modifier = Modifier.width(80.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                SettingSection("General") {
+                    SettingToggle("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
+                    SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
+                    SettingToggle("Haptic Feedback", settings.enableVibration) { onUpdate(settings.copy(enableVibration = it)) }
+                }
+                SettingSection("Item Spawning") {
+                    ItemType.entries.forEach { type ->
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(type.icon, null, Modifier.size(20.dp), tint = type.color)
+                                Spacer(Modifier.width(12.dp))
+                                Text(type.label)
+                            }
+                            Checkbox(checked = settings.enabledItems[type] == true, onCheckedChange = { isChecked ->
+                                val newMap = settings.enabledItems.toMutableMap()
+                                newMap[type] = isChecked
+                                onUpdate(settings.copy(enabledItems = newMap))
+                            })
+                        }
                     }
+                }
+                SettingSection("Difficulty") {
+                    Text("Max Items: ${settings.maxObjects}")
+                    Slider(value = settings.maxObjects.toFloat(), onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }, valueRange = 1f..10f)
                 }
             }
         }
     )
 }
 
-@Composable fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) { Text(label); Switch(checked = checked, onCheckedChange = onCheckedChange) }
+@Composable
+fun SettingSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column {
+        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(8.dp))
+        content()
+        HorizontalDivider(Modifier.padding(top = 12.dp))
+    }
 }
 
-@Composable fun ResultDialog(state: SnakeState, onRestart: () -> Unit) {
-    AlertDialog(onDismissRequest = {}, confirmButton = { Button(onClick = onRestart) { Text("RETRY") } }, title = { Text("Game Over") }, text = { Text("Final Score: ${state.score}\nUnlocks: ${state.permanentEffects.size}", fontSize = 18.sp) })
+@Composable
+fun StatsList(items: Map<ItemType, Int>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ItemType.entries.forEach { type ->
+            val count = items[type] ?: 0
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(type.icon, null, Modifier.size(18.dp), tint = type.color)
+                    Spacer(Modifier.width(8.dp))
+                    Text(type.label)
+                }
+                Text("$count", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+// 辅助逻辑
+fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
+    val newDir = when {
+        abs(dx) > abs(dy) -> {
+            if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT 
+            else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT 
+            else s.direction
+        }
+        abs(dy) > abs(dx) -> {
+            if (dy > 0 && s.direction != Direction.UP) Direction.DOWN 
+            else if (dy < 0 && s.direction != Direction.DOWN) Direction.UP 
+            else s.direction
+        }
+        else -> s.direction
+    }
+    return s.copy(direction = newDir)
+}
+
+@Composable
+fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+        Text(label)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+fun ResultDialog(state: SnakeState, oldHS: Int, onRestart: () -> Unit) {
+    AlertDialog(onDismissRequest = {}, confirmButton = { Button(onClick = onRestart) { Text("REPLAY") } },
+        title = { Text("Game Over") },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("${state.score}", fontSize = 56.sp, fontWeight = FontWeight.Black)
+                StatsList(state.itemsCollected)
+            }
+        }
+    )
+}
+
+@Composable
+fun PauseStatsDialog(state: SnakeState, onResume: () -> Unit) {
+    AlertDialog(onDismissRequest = onResume, confirmButton = { Button(onClick = onResume) { Text("RESUME") } },
+        title = { Text("Paused") }, text = { StatsList(state.itemsCollected) }
+    )
 }

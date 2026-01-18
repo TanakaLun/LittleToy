@@ -4,26 +4,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import kotlin.math.abs
 import kotlin.random.Random
 
 object GameConfig {
     const val BASE_SPEED = 150L
-    const val MIN_SPEED = 50L
-    const val VERSION = "2.0.2"
+    const val MIN_SPEED = 60L
+    const val VERSION = "1.9.2"
+    const val GHOST_DURATION_MS = 15000L // 15秒
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 
-enum class ItemType(val color: Color, val score: Int, val weight: Float, val label: String, val icon: ImageVector, val canPermanent: Boolean = true) {
+enum class ItemType(val color: Color, val score: Int, val weight: Float, val label: String, val icon: ImageVector) {
     FOOD_BASIC(Color(0xFF4CAF50), 10, 0.7f, "Basic", Icons.Default.Fastfood),
     FOOD_GOLD(Color(0xFFFFD700), 30, 0.15f, "Gold", Icons.Default.Star),
     FOOD_POISON(Color(0xFF9C27B0), -20, 0.05f, "Poison", Icons.Default.Dangerous),
     SHIELD(Color(0xFF2196F3), 50, 0.03f, "Shield", Icons.Default.Shield),
-    SLOW(Color(0xFFFF9800), 50, 0.04f, "Slow", Icons.Default.AvTimer, false),
-    GHOST(Color(0xFFE91E63), 50, 0.03f, "Ghost", Icons.Default.Deblur),
-    PORTAL(Color(0xFF00BCD4), 40, 0.02f, "Portal", Icons.Default.Cyclone),
-    BOMB(Color(0xFFF44336), -10, 0.02f, "Bomb", Icons.Default.Eco)
+    SLOW(Color(0xFFFF9800), 50, 0.04f, "Slow", Icons.Default.AvTimer),
+    GHOST(Color(0xFFE91E63), 50, 0.03f, "Ghost", Icons.Default.Deblur)
 }
 
 data class GameObject(val pos: Pair<Int, Int>, val type: ItemType)
@@ -38,13 +36,12 @@ data class SnakeState(
     val score: Int = 0,
     val highScore: Int = 0,
     val itemsCollected: Map<ItemType, Int> = emptyMap(),
-    val totalCollected: Map<ItemType, Int> = emptyMap(),
     val gridWidth: Int = 20,
     val gridHeight: Int = 20,
     val speedModifier: Long = 0,
-    val ghostTicks: Int = 0,
-    val hasShield: Boolean = false,
-    val permanentEffects: Set<ItemType> = emptySet()
+    // 效果追踪
+    val shieldCount: Int = 0,
+    val ghostTimeRemaining: Long = 0L // 剩余毫秒数
 )
 
 data class GameSettings(
@@ -53,69 +50,91 @@ data class GameSettings(
     val dynamicGrid: Boolean = true,
     val enableVibration: Boolean = true,
     val maxObjects: Int = 5,
-    val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true },
-    val thresholds: Map<ItemType, Int> = ItemType.entries.filter { it.canPermanent }.associateWith { 10 }
+    val isGhostPermanent: Boolean = false, // 幽灵效果是否永久
+    val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
-fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
+fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): SnakeState {
     if (state.isGameOver || state.isPaused || !state.isStarted) return state
+    
     val head = state.snake.first()
-    var nX = when (state.direction) { Direction.LEFT -> head.first - 1; Direction.RIGHT -> head.first + 1; else -> head.first }
-    var nY = when (state.direction) { Direction.UP -> head.second - 1; Direction.DOWN -> head.second + 1; else -> head.second }
+    var nX = when (state.direction) { 
+        Direction.LEFT -> head.first - 1 
+        Direction.RIGHT -> head.first + 1 
+        else -> head.first 
+    }
+    var nY = when (state.direction) { 
+        Direction.UP -> head.second - 1 
+        Direction.DOWN -> head.second + 1 
+        else -> head.second 
+    }
 
+    // 幽灵状态判断
+    val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0
+
+    // 边界逻辑
+    var hitWall = false
     if (settings.isLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
         nY = (nY + state.gridHeight) % state.gridHeight
     } else if (nX !in 0 until state.gridWidth || nY !in 0 until state.gridHeight) {
-        return if (state.hasShield || state.permanentEffects.contains(ItemType.SHIELD)) state.copy(hasShield = false) else state.copy(isGameOver = true)
+        hitWall = true
     }
 
     val nH = nX to nY
-    val isGhost = state.ghostTicks > 0 || state.permanentEffects.contains(ItemType.GHOST)
-    if (state.snake.contains(nH) && !isGhost) {
-        return if (state.hasShield || state.permanentEffects.contains(ItemType.SHIELD)) state.copy(hasShield = false) else state.copy(isGameOver = true)
+    // 自撞逻辑 (幽灵状态下免疫)
+    val hitSelf = state.snake.contains(nH) && !isGhostActive
+
+    // 护盾逻辑
+    if (hitWall || hitSelf) {
+        return if (state.shieldCount > 0) {
+            state.copy(shieldCount = state.shieldCount - 1)
+        } else {
+            state.copy(isGameOver = true)
+        }
     }
 
     val nS = state.snake.toMutableList().apply { add(0, nH) }
     var sc = state.score
-    val tc = state.totalCollected.toMutableMap(); val ic = state.itemsCollected.toMutableMap()
-    var sm = state.speedModifier; var gs = (state.ghostTicks - 1).coerceAtLeast(0)
-    var activeShield = state.hasShield; val perm = state.permanentEffects.toMutableSet()
+    val ic = state.itemsCollected.toMutableMap()
+    var sm = state.speedModifier
+    var sCount = state.shieldCount
+    var gTime = if (settings.isGhostPermanent) 0L else (state.ghostTimeRemaining - tickDuration).coerceAtLeast(0L)
 
     val hitObject = state.objects.find { it.pos == nH }
     val remainingObjects = state.objects.toMutableList()
-
+    
     if (hitObject != null) {
         remainingObjects.remove(hitObject)
         sc += hitObject.type.score
         ic[hitObject.type] = (ic[hitObject.type] ?: 0) + 1
-        tc[hitObject.type] = (tc[hitObject.type] ?: 0) + 1
-        if (hitObject.type.canPermanent && (tc[hitObject.type] ?: 0) >= (settings.thresholds[hitObject.type] ?: 10)) perm.add(hitObject.type)
-
-        when(hitObject.type) {
+        
+        when (hitObject.type) {
             ItemType.SLOW -> sm += 15
-            ItemType.GHOST -> gs = 20
-            ItemType.SHIELD -> activeShield = true
-            ItemType.BOMB -> repeat(3) { if(nS.size > 2) nS.removeAt(nS.size - 1) }
-            ItemType.PORTAL -> {
-                nS[0] = (0 until state.gridWidth).flatMap { x -> (0 until state.gridHeight).map { y -> x to y } }
-                    .filter { !nS.contains(it) }.randomOrNull() ?: nH
-            }
+            ItemType.SHIELD -> sCount++
+            ItemType.GHOST -> if (!settings.isGhostPermanent) gTime = GameConfig.GHOST_DURATION_MS
             else -> {}
         }
-        if (hitObject.type.score <= 0 && hitObject.type != ItemType.BOMB) nS.removeAt(nS.size - 1)
-    } else nS.removeAt(nS.size - 1)
-
-    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.2f) {
-        val congested = nS.size >= (state.gridWidth * state.gridHeight) / 3 && !isGhost
-        val weighted = ItemType.entries.filter { settings.enabledItems[it] == true }.flatMap { type ->
-            val w = if (congested) (if (type.score > 0) (type.weight * 30).toInt() else (type.weight * 200).toInt()) else (type.weight * 100).toInt()
-            List(w) { type }
-        }
-        val p = (0 until state.gridWidth).flatMap { x -> (0 until state.gridHeight).map { y -> x to y } }
-            .filter { pos -> !nS.contains(pos) && remainingObjects.none { it.pos == pos } }.randomOrNull()
-        if (p != null && weighted.isNotEmpty()) remainingObjects.add(GameObject(p, weighted.random()))
+        if (hitObject.type.score <= 0) nS.removeAt(nS.size - 1)
+    } else {
+        nS.removeAt(nS.size - 1)
     }
 
-    return state.copy(snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), itemsCollected = ic, totalCollected = tc, speedModifier = sm, ghostTicks = gs, hasShield = activeShield, permanentEffects = perm)
+    // 道具生成
+    val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
+    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.15f && allowedTypes.isNotEmpty()) {
+        val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
+        if (!nS.contains(newPos) && remainingObjects.none { it.pos == newPos }) {
+            val totalWeight = allowedTypes.sumOf { it.weight.toDouble() }
+            val r = Random.nextDouble() * totalWeight
+            var acc = 0.0
+            val selectedType = allowedTypes.first { acc += it.weight; r <= acc }
+            remainingObjects.add(GameObject(newPos, selectedType))
+        }
+    }
+
+    return state.copy(
+        snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), 
+        itemsCollected = ic, speedModifier = sm, shieldCount = sCount, ghostTimeRemaining = gTime
+    )
 }
