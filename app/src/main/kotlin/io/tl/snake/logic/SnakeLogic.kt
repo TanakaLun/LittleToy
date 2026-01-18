@@ -7,7 +7,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import kotlin.math.abs
 import kotlin.random.Random
 
-object GameConfig { const val BASE_SPEED = 150L; const val MIN_SPEED = 60L; const val VERSION = "3.0.1" }
+object GameConfig { const val BASE_SPEED = 150L; const val MIN_SPEED = 60L; const val VERSION = "3.0.2" }
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 
 enum class ItemType(val color: Color, val score: Int, val weight: Float, val label: String, val icon: ImageVector) {
@@ -17,7 +17,7 @@ enum class ItemType(val color: Color, val score: Int, val weight: Float, val lab
     SHIELD(Color(0xFF2196F3), 50, 0.03f, "Shield", Icons.Default.Shield),
     SLOW(Color(0xFFFF9800), 50, 0.04f, "Slow", Icons.Default.AvTimer),
     GHOST(Color(0xFFE91E63), 50, 0.03f, "Ghost", Icons.Default.Deblur),
-    MAGNET(Color(0xFF00BCD4), 20, 0.04f, "Magnet", Icons.Default.Magnet)
+    MAGNET(Color(0xFF00BCD4), 20, 0.04f, "Magnet", Icons.Default.Adjust) // 修复：使用已有的 Adjust 图标
 }
 
 data class GameObject(val pos: Pair<Int, Int>, val type: ItemType)
@@ -31,7 +31,7 @@ data class SnakeState(
     val gridWidth: Int = 20, val gridHeight: Int = 20,
     val speedModifier: Long = 0,
     val ghostTicks: Int = 0, val hasShield: Boolean = false,
-    val magnetTicks: Int = 0, // 磁铁剩余时间
+    val magnetTicks: Int = 0,
     val cumulativeCounts: Map<ItemType, Int> = emptyMap()
 )
 
@@ -40,7 +40,7 @@ data class GameSettings(
     val enableVibration: Boolean = true, val maxObjects: Int = 5,
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true },
     val useGradient: Boolean = true, val usePulse: Boolean = true,
-    val permThresholds: Map<ItemType, Int> = mapOf(ItemType.GHOST to 10, ItemType.SHIELD to 5)
+    val permThresholds: Map<ItemType, Int> = mapOf(ItemType.GHOST to 10, ItemType.SHIELD to 5, ItemType.MAGNET to 8)
 )
 
 fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
@@ -68,8 +68,9 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     val ic = state.itemsCollected.toMutableMap()
     val cc = state.cumulativeCounts.toMutableMap()
 
-    // 磁铁吸附逻辑：5x5 范围
-    if (ms > 0) {
+    // 1. 磁铁吸附逻辑 (5x5区域)
+    val isPermMagnet = (state.cumulativeCounts[ItemType.MAGNET] ?: 0) >= (settings.permThresholds[ItemType.MAGNET] ?: Int.MAX_VALUE)
+    if (ms > 0 || isPermMagnet) {
         val toCollect = currentObjs.filter { abs(it.pos.first - nH.first) <= 2 && abs(it.pos.second - nH.second) <= 2 }
         toCollect.forEach { obj ->
             sc += obj.type.score
@@ -81,7 +82,7 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         }
     }
 
-    // 正常移动与碰撞逻辑
+    // 2. 正常碰撞逻辑
     val hitObj = currentObjs.find { it.pos == nH }
     val nS = state.snake.toMutableList().apply { add(0, nH) }
     if (hitObj != null) {
@@ -92,26 +93,29 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         when(hitObj.type) {
             ItemType.GHOST -> gs = 20
             ItemType.SHIELD -> activeShield = true
-            ItemType.MAGNET -> ms = 30 // 约3秒（假设每秒10滴答）
+            ItemType.MAGNET -> ms = 30 
             else -> {}
         }
         if (hitObj.type.score <= 0) nS.removeAt(nS.size - 1)
     } else nS.removeAt(nS.size - 1)
 
-    // 生成逻辑 (Eco-Balance)
+    // 3. 动态权重生成逻辑 (修复 Double 运算报错)
     val occupancy = nS.size.toFloat() / (state.gridWidth * state.gridHeight)
     val allowed = ItemType.entries.filter { settings.enabledItems[it] == true }
     if (currentObjs.size < settings.maxObjects && Random.nextFloat() < 0.3f && allowed.isNotEmpty()) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
         if (!nS.contains(newPos)) {
             val totalW = allowed.sumOf { type ->
-                var w = type.weight.toDouble()
-                if (occupancy >= 0.33f && type == ItemType.FOOD_POISON) w *= 5.0
-                w
+                val w = type.weight.toDouble()
+                if (occupancy >= 0.33f && type == ItemType.FOOD_POISON) w * 5.0 else w
             }
             val r = Random.nextDouble() * totalW
             var acc = 0.0
-            val selected = allowed.first { acc += (if(occupancy >= 0.33f && it == ItemType.FOOD_POISON) it.weight*5.0 else it.weight); r <= acc }
+            val selected = allowed.first { type ->
+                val w = type.weight.toDouble()
+                acc += if (occupancy >= 0.33f && type == ItemType.FOOD_POISON) w * 5.0 else w
+                r <= acc
+            }
             currentObjs.add(GameObject(newPos, selected))
         }
     }

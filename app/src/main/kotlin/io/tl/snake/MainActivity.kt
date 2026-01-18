@@ -51,7 +51,7 @@ class MainActivity : ComponentActivity() {
                     enabledItems = ItemType.entries.associateWith { json.optJSONObject("enabledItems")?.optBoolean(it.name, true) ?: true },
                     useGradient = json.optBoolean("useGradient", true),
                     usePulse = json.optBoolean("usePulse", true),
-                    permThresholds = ItemType.entries.associateWith { thresholdsJson?.optInt(it.name, if(it == ItemType.GHOST) 10 else if(it == ItemType.SHIELD) 5 else 0) ?: 0 }
+                    permThresholds = ItemType.entries.associateWith { thresholdsJson?.optInt(it.name, if(it == ItemType.GHOST) 10 else if(it == ItemType.SHIELD) 5 else if(it == ItemType.MAGNET) 8 else 0) ?: 0 }
                 )
             } catch (e: Exception) { GameSettings() }
         }
@@ -72,7 +72,8 @@ class MainActivity : ComponentActivity() {
                 var persistentHS by remember { mutableStateOf(sp.getInt("hs", 0)) }
                 var state by remember { mutableStateOf(SnakeState(highScore = persistentHS)) }
                 val context = LocalContext.current
-                val pulse by rememberInfiniteTransition().animateFloat(0.4f, 1f, infiniteRepeatable(tween(600), RepeatMode.Reverse))
+                val infiniteTransition = rememberInfiniteTransition(label = "global")
+                val pulseAlpha by infiniteTransition.animateFloat(0.4f, 1f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "pulse")
 
                 Scaffold(
                     topBar = {
@@ -83,9 +84,15 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(state, settings, persistentHS, pulse, 
-                            onHSReset = { persistentHS = 0; sp.edit().putInt("hs", 0).apply(); state = state.copy(highScore = 0); triggerVibration(context, settings.enableVibration, 100) }, 
-                            onStateChange = { if (it.direction != state.direction) triggerVibration(context, settings.enableVibration, 10); state = it }
+                        GameContent(state, settings, persistentHS, pulseAlpha, 
+                            onHSReset = { 
+                                persistentHS = 0; sp.edit().putInt("hs", 0).apply(); state = state.copy(highScore = 0)
+                                triggerVibration(context, settings.enableVibration, 100) 
+                            }, 
+                            onStateChange = { 
+                                if (it.direction != state.direction) triggerVibration(context, settings.enableVibration, 10)
+                                state = it 
+                            }
                         )
                         if (showSettings) SettingsDialog(settings, onDismiss = { showSettings = false }) { settings = it; saveSettings(it) }
                     }
@@ -137,17 +144,17 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, pu
                         }
                         state.objects.forEach { drawCircle(it.type.color, cellSize/3.5f, Offset(it.pos.first*cellSize+cellSize/2, it.pos.second*cellSize+cellSize/2)) }
                         
-                        // 绘制蛇身
+                        val isPermGhost = (state.cumulativeCounts[ItemType.GHOST] ?: 0) >= (settings.permThresholds[ItemType.GHOST] ?: Int.MAX_VALUE)
                         state.snake.forEachIndexed { i, p ->
                             val color = if (settings.useGradient) lerp(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primaryContainer, i.toFloat()/state.snake.size) else MaterialTheme.colorScheme.primary
-                            val alpha = if (settings.usePulse && state.ghostTicks > 0) pulse else 1f
+                            val alpha = if (settings.usePulse && (state.ghostTicks > 0 || isPermGhost)) pulse else 1f
                             drawRoundRect(if(i==0 && state.hasShield) Color.Cyan else color, Offset(p.first*cellSize+1f, p.second*cellSize+1f), Size(cellSize-2f, cellSize-2f), CornerRadius(4.dp.toPx()), alpha = alpha)
                             
-                            // 磁铁特效：蛇头两侧蓝红呼吸动效
-                            if (i == 0 && state.magnetTicks > 0) {
-                                val effectSize = cellSize * 0.4f * pulse
-                                drawCircle(Color.Red.copy(0.6f), effectSize, Offset(p.first*cellSize, p.second*cellSize + cellSize/2))
-                                drawCircle(Color.Blue.copy(0.6f), effectSize, Offset(p.first*cellSize + cellSize, p.second*cellSize + cellSize/2))
+                            // 磁铁特效：在蛇头左右两侧绘制蓝红呼吸感应圈
+                            if (i == 0 && (state.magnetTicks > 0 || (state.cumulativeCounts[ItemType.MAGNET] ?: 0) >= (settings.permThresholds[ItemType.MAGNET] ?: Int.MAX_VALUE))) {
+                                val effectRadius = cellSize * 0.4f * pulse
+                                drawCircle(Color.Red.copy(0.5f), effectRadius, Offset(p.first * cellSize, p.second * cellSize + cellSize / 2))
+                                drawCircle(Color.Blue.copy(0.5f), effectRadius, Offset(p.first * cellSize + cellSize, p.second * cellSize + cellSize / 2))
                             }
                         }
                     }
@@ -159,7 +166,7 @@ fun GameContent(state: SnakeState, settings: GameSettings, persistentHS: Int, pu
     if (state.isGameOver) AlertDialog(onDismissRequest={}, confirmButton={ Button(onClick={ onStateChange(SnakeState(highScore=persistentHS, isStarted=true, gridWidth=state.gridWidth, gridHeight=state.gridHeight)) }){ Text("REPLAY") } }, title={ Text("Game Over") }, text={ Text("Score: ${state.score}") })
 }
 
-// --- 顶级辅助函数（解决 Conflict） ---
+// --- 顶级辅助函数 ---
 
 fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
     if (abs(dx) < 15f && abs(dy) < 15f) return s
@@ -173,7 +180,7 @@ fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
 
 fun triggerVibration(c: Context, e: Boolean, d: Long) {
     if (!e) return
-    val v = c.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+    val v = c.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) v.vibrate(VibrationEffect.createOneShot(d, VibrationEffect.DEFAULT_AMPLITUDE)) else v.vibrate(d)
 }
 
@@ -187,8 +194,9 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                     Text(type.label, Modifier.weight(1f))
                     var text by remember { mutableStateOf(settings.permThresholds[type]?.toString() ?: "0") }
                     OutlinedTextField(value = text, onValueChange = { 
-                        text = it.filter { c -> c.isDigit() }
-                        val newVal = text.toIntOrNull() ?: 0
+                        val filtered = it.filter { c -> c.isDigit() }
+                        text = filtered
+                        val newVal = filtered.toIntOrNull() ?: 0
                         val newMap = settings.permThresholds.toMutableMap()
                         newMap[type] = newVal
                         onUpdate(settings.copy(permThresholds = newMap))
@@ -204,4 +212,8 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
     })
 }
 
-@Composable fun SettingToggle(l: String, c: Boolean, o: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().height(48.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) { Text(l); Switch(checked = c, onCheckedChange = o) } }
+@Composable fun SettingToggle(l: String, c: Boolean, o: (Boolean) -> Unit) { 
+    Row(Modifier.fillMaxWidth().height(48.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) { 
+        Text(l); Switch(checked = c, onCheckedChange = o) 
+    } 
+}
