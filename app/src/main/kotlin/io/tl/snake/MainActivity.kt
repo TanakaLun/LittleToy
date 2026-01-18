@@ -382,24 +382,6 @@ fun StatsList(items: Map<ItemType, Int>) {
     }
 }
 
-// 辅助逻辑
-fun handleInput(s: SnakeState, dx: Float, dy: Float): SnakeState {
-    val newDir = when {
-        abs(dx) > abs(dy) -> {
-            if (dx > 0 && s.direction != Direction.LEFT) Direction.RIGHT 
-            else if (dx < 0 && s.direction != Direction.RIGHT) Direction.LEFT 
-            else s.direction
-        }
-        abs(dy) > abs(dx) -> {
-            if (dy > 0 && s.direction != Direction.UP) Direction.DOWN 
-            else if (dy < 0 && s.direction != Direction.DOWN) Direction.UP 
-            else s.direction
-        }
-        else -> s.direction
-    }
-    return s.copy(direction = newDir)
-}
-
 @Composable
 fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
