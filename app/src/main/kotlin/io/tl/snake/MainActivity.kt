@@ -143,98 +143,126 @@ fun ScoreChip(icon: ImageVector, label: String, value: Int, color: Color, onLong
 }
 
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (SnakeState) -> Unit) {
+fun GameContent(
+    state: SnakeState,
+    settings: GameSettings,
+    onStateChange: (SnakeState) -> Unit
+) {
     val colorScheme = MaterialTheme.colorScheme
     val currentState by rememberUpdatedState(state)
-    val currentSpeed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
-    
-    // 衰减特效动画控制
-    val infiniteTransition = rememberInfiniteTransition(label = "decay")
-    val decayAlpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(200), RepeatMode.Reverse), "flash")
-    val decayScale by infiniteTransition.animateFloat(0.8f, 1.2f, infiniteRepeatable(tween(400), RepeatMode.Reverse), "breath")
+
+    val speed =
+        (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier)
+            .coerceAtLeast(GameConfig.MIN_SPEED)
 
     LaunchedEffect(state.isGameOver, state.isPaused, state.isStarted) {
         while (!currentState.isGameOver && !currentState.isPaused && currentState.isStarted) {
-            delay(currentSpeed)
-            onStateChange(gameTick(currentState, settings, currentSpeed))
+            delay(speed)
+            onStateChange(gameTick(currentState, settings, speed))
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 32.dp)) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 32.dp)
+    ) {
         val density = LocalContext.current.resources.displayMetrics.density
-        val cellSizePx = settings.targetCellSize * density
-        
-        // 关键逻辑：先确定格数，再确定画布
-        val gridW = if (settings.dynamicGrid) (constraints.maxWidth / cellSizePx).toInt() else 20
-        val gridH = if (settings.dynamicGrid) (constraints.maxHeight / cellSizePx).toInt() else 20
-        
-        val finalW = cellSizePx * gridW
-        val finalH = cellSizePx * gridH
+        val targetPx = settings.targetCellSize * density
+
+        // ✅ 1️⃣ 先确定格子数
+        val gridW =
+            if (settings.dynamicGrid)
+                (constraints.maxWidth / targetPx).toInt().coerceIn(10, 40)
+            else 20
+
+        val gridH =
+            if (settings.dynamicGrid)
+                (constraints.maxHeight / targetPx).toInt().coerceIn(10, 60)
+            else 20
+
+        // ✅ 2️⃣ 反推唯一 cellSizePx（关键修复）
+        val cellSizePx = min(
+            constraints.maxWidth / gridW.toFloat(),
+            constraints.maxHeight / gridH.toFloat()
+        )
+
+        val boardW = gridW * cellSizePx
+        val boardH = gridH * cellSizePx
 
         LaunchedEffect(gridW, gridH) {
-            if (state.gridWidth != gridW || state.gridHeight != gridH) 
+            if (state.gridWidth != gridW || state.gridHeight != gridH)
                 onStateChange(state.copy(gridWidth = gridW, gridHeight = gridH))
         }
 
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // 护盾显示：右上角外部
-            if (state.shieldCount > 0) {
-                Surface(
-                    modifier = Modifier.align(Alignment.TopEnd).offset(y = (-40).dp), 
-                    color = ItemType.SHIELD.color, shape = RoundedCornerShape(8.dp), shadowElevation = 4.dp
-                ) {
-                    Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Shield, null, Modifier.size(16.dp), tint = Color.White)
-                        Text("${state.shieldCount}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 4.dp))
-                    }
-                }
-            }
-
-            Box(Modifier.size((finalW / density).dp, (finalH / density).dp).clip(RoundedCornerShape(8.dp)).background(colorScheme.surfaceVariant.copy(0.3f)).border(1.dp, colorScheme.outlineVariant.copy(0.3f), RoundedCornerShape(8.dp))) {
-                Canvas(Modifier.fillMaxSize().pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
-                    detectDragGestures { change, drag -> change.consume(); onStateChange(handleInput(currentState, drag.x, drag.y)) }
-                }) {
-                    if (settings.showGrid) {
-                        for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, finalH))
-                        for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(finalW, i * cellSizePx))
-                    }
-                    
-                    state.objects.forEach { obj ->
-                        val isExpiring = settings.enableItemDecay && obj.timeLeft < 5000L
-                        val alpha = if (isExpiring) decayAlpha else 1f
-                        val scale = if (isExpiring) decayScale else 1f
-                        drawCircle(obj.type.color.copy(alpha), (cellSizePx * 0.35f) * scale, Offset(obj.pos.first * cellSizePx + cellSizePx / 2, obj.pos.second * cellSizePx + cellSizePx / 2))
-                    }
-                    
-                    state.snake.forEachIndexed { i, p ->
-                        val isInvincible = state.invincibleTimeRemaining > 0
-                        val alpha = (1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)
-                        val color = when {
-                            i == 0 && isInvincible -> Color(0xFF00E5FF) // 无敌态亮青色
-                            i == 0 && (state.ghostTimeRemaining > 0 || settings.isGhostPermanent) -> ItemType.GHOST.color
-                            i == 0 && state.shieldCount > 0 -> ItemType.SHIELD.color
-                            else -> colorScheme.primary
+            Box(
+                Modifier
+                    .size((boardW / density).dp, (boardH / density).dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colorScheme.surfaceVariant.copy(0.3f))
+                    .border(1.dp, colorScheme.outlineVariant.copy(0.3f), RoundedCornerShape(8.dp))
+            ) {
+                Canvas(
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                onStateChange(handleInput(currentState, drag.x, drag.y))
+                            }
                         }
-                        drawRoundRect(color.copy(alpha), Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f), Size(cellSizePx - 3f, cellSizePx - 3f), CornerRadius(4.dp.toPx()))
+                ) {
+                    if (settings.showGrid) {
+                        for (i in 0..gridW)
+                            drawLine(
+                                colorScheme.onSurface.copy(0.05f),
+                                Offset(i * cellSizePx, 0f),
+                                Offset(i * cellSizePx, boardH)
+                            )
+                        for (i in 0..gridH)
+                            drawLine(
+                                colorScheme.onSurface.copy(0.05f),
+                                Offset(0f, i * cellSizePx),
+                                Offset(boardW, i * cellSizePx)
+                            )
                     }
 
-                    // 置顶进度条
-                    val effectTime = if (state.invincibleTimeRemaining > 0) state.invincibleTimeRemaining else state.ghostTimeRemaining
-                    val effectMax = if (state.invincibleTimeRemaining > 0) GameConfig.INVINCIBLE_DURATION_MS else GameConfig.GHOST_DURATION_MS
-                    if (effectTime > 0 && !settings.isGhostPermanent) {
-                        val progress = effectTime.toFloat() / effectMax
-                        val color = if (state.invincibleTimeRemaining > 0) Color(0xFF00E5FF) else ItemType.GHOST.color
-                        drawRect(color.copy(0.2f), Offset(0f, 0f), Size(finalW, 4.dp.toPx()))
-                        drawRect(color, Offset(0f, 0f), Size(finalW * progress, 4.dp.toPx()))
+                    state.objects.forEach {
+                        drawCircle(
+                            it.type.color,
+                            cellSizePx * 0.35f,
+                            Offset(
+                                it.pos.first * cellSizePx + cellSizePx / 2,
+                                it.pos.second * cellSizePx + cellSizePx / 2
+                            )
+                        )
+                    }
+
+                    state.snake.forEachIndexed { i, p ->
+                        drawRoundRect(
+                            colorScheme.primary.copy(
+                                alpha = (1f - i / state.snake.size.toFloat()).coerceAtLeast(0.3f)
+                            ),
+                            Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f),
+                            Size(cellSizePx - 3f, cellSizePx - 3f),
+                            CornerRadius(4.dp.toPx())
+                        )
                     }
                 }
-                if (!state.isStarted) Button(onClick = { onStateChange(state.copy(isStarted = true)) }, Modifier.align(Alignment.Center)) { Text("START") }
+
+                if (!state.isStarted)
+                    Button(onClick = { onStateChange(state.copy(isStarted = true)) },
+                        Modifier.align(Alignment.Center)
+                    ) { Text("START") }
             }
         }
     }
 
-    if (state.isGameOver) ResultDialog(state) { onStateChange(SnakeState(highScore = state.highScore, isStarted = true)) }
-    else if (state.isPaused) PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
+    if (state.isGameOver)
+        ResultDialog(state) { onStateChange(SnakeState(highScore = state.highScore, isStarted = true)) }
+    else if (state.isPaused)
+        PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
 }
 
 @Composable
