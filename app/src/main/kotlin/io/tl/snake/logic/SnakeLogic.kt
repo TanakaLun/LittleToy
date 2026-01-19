@@ -11,7 +11,7 @@ object GameConfig {
     const val MIN_SPEED = 60L
     const val GHOST_DURATION_MS = 15000L
     const val INVINCIBLE_DURATION_MS = 15000L // 护盾生效后的无敌时长
-    const val ITEM_DECAY_MS = 15000L // 道具存在时长
+    const val ITEM_DECAY_MS = 15000L // 道具总寿命
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
@@ -27,8 +27,8 @@ enum class ItemType(val color: Color, val score: Int, val weight: Float, val lab
 
 data class GameObject(
     val pos: Pair<Int, Int>, 
-    val type: ItemType, 
-    val timeLeft: Long = GameConfig.ITEM_DECAY_MS // 剩余寿命
+    val type: ItemType,
+    val timeLeft: Long = GameConfig.ITEM_DECAY_MS
 )
 
 data class GameSettings(
@@ -38,8 +38,8 @@ data class GameSettings(
     val enableVibration: Boolean = true,
     val maxObjects: Int = 5,
     val isGhostPermanent: Boolean = false,
-    val enableItemDecay: Boolean = true, // 道具消失开关
-    val targetCellSize: Float = 24f,    // 自定义方格大小 (dp)
+    val enableItemDecay: Boolean = true,
+    val targetCellSize: Float = 22f, // 默认方格大小 dp
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
@@ -58,15 +58,16 @@ data class SnakeState(
     val speedModifier: Long = 0,
     val shieldCount: Int = 0,
     val ghostTimeRemaining: Long = 0L,
-    val invincibleTimeRemaining: Long = 0L, // 护盾无敌时间
+    val invincibleTimeRemaining: Long = 0L,
     val lastEvent: GameEvent? = null
 )
 
 enum class GameEvent { EAT_GOOD, EAT_BAD, HIT_WALL, SHIELD_BREAK }
 
-fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): SnakeState {
+fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     if (state.isGameOver || state.isPaused || !state.isStarted) return state
     
+    val tickDuration = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
     val head = state.snake.first()
     var nX = when (state.direction) { 
         Direction.LEFT -> head.first - 1; Direction.RIGHT -> head.first + 1; else -> head.first 
@@ -75,14 +76,12 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
         Direction.UP -> head.second - 1; Direction.DOWN -> head.second + 1; else -> head.second 
     }
 
-    // 无敌状态判定：本身开启了Ghost或正在护盾无敌期
     val isInvincible = state.invincibleTimeRemaining > 0
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0 || isInvincible
     val activeLoopMode = settings.isLoopMode || isInvincible
-
     var event: GameEvent? = null
 
-    // 碰撞与边界
+    // 边界检测
     var hitWall = false
     if (activeLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -96,18 +95,12 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
 
     if (hitWall || hitSelf) {
         return if (state.shieldCount > 0) {
-            // 消耗护盾，获得15秒无敌
-            state.copy(
-                shieldCount = state.shieldCount - 1, 
-                invincibleTimeRemaining = GameConfig.INVINCIBLE_DURATION_MS,
-                lastEvent = GameEvent.SHIELD_BREAK
-            )
+            state.copy(shieldCount = state.shieldCount - 1, invincibleTimeRemaining = GameConfig.INVINCIBLE_DURATION_MS, lastEvent = GameEvent.SHIELD_BREAK)
         } else {
             state.copy(isGameOver = true, lastEvent = GameEvent.HIT_WALL)
         }
     }
 
-    // 逻辑更新：处理蛇身和道具
     val nS = state.snake.toMutableList().apply { add(0, nH) }
     var sc = state.score
     val ic = state.itemsCollected.toMutableMap()
@@ -116,12 +109,12 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
     var gTime = if (settings.isGhostPermanent) 0L else (state.ghostTimeRemaining - tickDuration).coerceAtLeast(0L)
     val iTime = (state.invincibleTimeRemaining - tickDuration).coerceAtLeast(0L)
 
-    // 处理现有道具生命值及碰撞
+    // 道具逻辑：衰减与碰撞
     val hitObject = state.objects.find { it.pos == nH }
     val remainingObjects = state.objects.asSequence()
         .map { it.copy(timeLeft = it.timeLeft - tickDuration) }
-        .filter { !settings.enableItemDecay || it.timeLeft > 0 } // 过滤掉过期的
-        .filter { it.pos != nH } // 过滤掉被吃掉的
+        .filter { !settings.enableItemDecay || it.timeLeft > 0 }
+        .filter { it.pos != nH }
         .toMutableList()
     
     if (hitObject != null) {
@@ -139,9 +132,9 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
         nS.removeAt(nS.size - 1)
     }
 
-    // 道具生成
+    // 生成
     val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
-    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.1f && allowedTypes.isNotEmpty()) {
+    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.12f && allowedTypes.isNotEmpty()) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
         if (!nS.contains(newPos) && remainingObjects.none { it.pos == newPos }) {
             val totalWeight = allowedTypes.sumOf { it.weight.toDouble() }
