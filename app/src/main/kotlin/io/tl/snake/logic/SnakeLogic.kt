@@ -69,7 +69,6 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
 
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0
 
-    // 死亡判定
     var hitWall = false
     if (settings.isLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -83,6 +82,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
 
     if (hitWall || hitSelf) {
         return if (state.shieldCount > 0) {
+            // 护盾消耗逻辑
             state.copy(shieldCount = state.shieldCount - 1)
         } else {
             state.copy(isGameOver = true)

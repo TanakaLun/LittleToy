@@ -89,13 +89,33 @@ class MainActivity : ComponentActivity() {
                             navigationIcon = {
                                 // 垂直放置的分数 Chip 组
                                 Column(Modifier.padding(start = 12.dp)) {
-                                    ScoreChip(Icons.Default.EmojiEvents, "HI", if(state.score > persistentHS) state.score else persistentHS, MaterialTheme.colorScheme.outline)
-                                    ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary)
+                                    ScoreChip(
+                                        icon = Icons.Default.EmojiEvents,
+                                        label = "HI",
+                                        value = if(state.score > persistentHS) state.score else persistentHS,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        onLongPress = {
+                                            // 长按将最高分归零
+                                            persistentHS = 0
+                                            sp.edit().putInt("hs", 0).apply()
+                                        }
+                                    )
+                                    ScoreChip(
+                                        icon = Icons.Default.MilitaryTech,
+                                        label = "SC",
+                                        value = state.score,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
                                 }
                             },
                             actions = {
                                 if (state.isStarted && !state.isGameOver) {
-                                    IconButton(onClick = { state = state.copy(isPaused = !state.isPaused) }) {
+                                    IconButton(onClick = { 
+                                        state = state.copy(isPaused = !state.isPaused)
+                                        if (settings.enableVibration) {
+                                            vibrateShort(LocalContext.current)
+                                        }
+                                    }) {
                                         Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
                                     }
                                 }
@@ -103,15 +123,35 @@ class MainActivity : ComponentActivity() {
                                     // 进入设置自动暂停
                                     if (state.isStarted && !state.isGameOver) state = state.copy(isPaused = true)
                                     showSettings = true 
+                                    if (settings.enableVibration) {
+                                        vibrateShort(LocalContext.current)
+                                    }
                                 }) { Icon(Icons.Default.Settings, null) }
                             }
                         )
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(state = state, settings = settings, onStateChange = { state = it })
+                        GameContent(
+                            state = state, 
+                            settings = settings, 
+                            onStateChange = { newState -> 
+                                // 处理振动反馈
+                                if (settings.enableVibration) {
+                                    handleVibration(state, newState, LocalContext.current)
+                                }
+                                state = newState 
+                            }
+                        )
                         if (showSettings) {
-                            SettingsDialog(settings, onDismiss = { showSettings = false }, onUpdate = { settings = it; saveSettings(it) })
+                            SettingsDialog(
+                                settings, 
+                                onDismiss = { showSettings = false }, 
+                                onUpdate = { 
+                                    settings = it
+                                    saveSettings(it)
+                                }
+                            )
                         }
                     }
                 }
@@ -127,12 +167,82 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// 振动工具函数
+fun vibrateShort(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+    } else {
+        @Suppress("DEPRECATION")
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator.vibrate(50)
+    }
+}
+
+fun vibrateLong(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator.vibrate(VibrationEffect.createOneShot(150, VibrationEffect.DEFAULT_AMPLITUDE))
+    } else {
+        @Suppress("DEPRECATION")
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator.vibrate(150)
+    }
+}
+
+fun handleVibration(oldState: SnakeState, newState: SnakeState, context: Context) {
+    // 吃到食物或道具
+    if (newState.score > oldState.score && newState.itemsCollected != oldState.itemsCollected) {
+        val lastItem = newState.itemsCollected.entries.lastOrNull { it.value > (oldState.itemsCollected[it.key] ?: 0) }
+        lastItem?.let { (itemType, _) ->
+            when (itemType) {
+                ItemType.FOOD_POISON -> {
+                    // 吃到毒食物，长振动
+                    vibrateLong(context)
+                }
+                else -> {
+                    // 吃到其他物品，短振动
+                    vibrateShort(context)
+                }
+            }
+        }
+    }
+    
+    // 游戏结束
+    if (!oldState.isGameOver && newState.isGameOver) {
+        // 长振动表示游戏结束
+        vibrateLong(context)
+    }
+    
+    // 护盾消耗
+    if (oldState.shieldCount > newState.shieldCount) {
+        // 护盾消耗，短振动
+        vibrateShort(context)
+    }
+}
+
 @Composable
-fun ScoreChip(icon: ImageVector, label: String, value: Int, color: Color) {
+fun ScoreChip(
+    icon: ImageVector, 
+    label: String, 
+    value: Int, 
+    color: Color,
+    onLongPress: (() -> Unit)? = null
+) {
     Surface(
         color = color.copy(alpha = 0.1f),
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.padding(vertical = 2.dp)
+        modifier = Modifier
+            .padding(vertical = 2.dp)
+            .pointerInput(onLongPress) {
+                if (onLongPress != null) {
+                    detectTapGestures(
+                        onLongPress = {
+                            onLongPress()
+                        }
+                    )
+                }
+            }
     ) {
         Row(Modifier.padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, Modifier.size(12.dp), tint = color)
@@ -156,17 +266,53 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
     }
 
     Box(Modifier.fillMaxSize()) {
-        BoxWithConstraints(Modifier.fillMaxSize().padding(20.dp)) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
             val density = LocalContext.current.resources.displayMetrics.density
-            val cellBasePx = 22f * density
+            val availableWidth = constraints.maxWidth.toFloat()
+            val availableHeight = constraints.maxHeight.toFloat()
             
-            // 严谨计算网格，确保逻辑坐标与显示区域对齐
-            val gridW = if (settings.dynamicGrid) (constraints.maxWidth / cellBasePx).toInt() else 20
-            val gridH = if (settings.dynamicGrid) (constraints.maxHeight / cellBasePx).toInt() else 20
+            // 计算棋盘显示区域，留出顶部进度条空间
+            val topPaddingForProgress = if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) 30.dp else 0.dp
+            val canvasPadding = 8.dp
             
-            val cellSizePx = (constraints.maxWidth.toFloat() / gridW).coerceAtMost(constraints.maxHeight.toFloat() / gridH)
+            // 计算棋盘实际可用区域
+            val canvasAvailableWidth = availableWidth - (canvasPadding * 2).toPx()
+            val canvasAvailableHeight = availableHeight - (canvasPadding + topPaddingForProgress).toPx()
+            
+            // 计算棋盘尺寸
+            val (gridW, gridH, cellSizePx) = if (settings.dynamicGrid) {
+                // 动态网格模式：根据可用区域计算最大网格
+                val minCellSize = 20f * density
+                val maxW = (canvasAvailableWidth / minCellSize).toInt()
+                val maxH = (canvasAvailableHeight / minCellSize).toInt()
+                
+                // 选择较小的网格尺寸以确保棋盘不会太大
+                val targetGrid = minOf(maxW, maxH, 30) // 限制最大30x30
+                
+                // 重新计算单元格大小以完全填充可用空间
+                val cellSize = minOf(
+                    canvasAvailableWidth / targetGrid,
+                    canvasAvailableHeight / targetGrid
+                )
+                
+                Triple(targetGrid, targetGrid, cellSize)
+            } else {
+                // 固定网格模式：20x20，宽度适应屏幕
+                val fixedGridSize = 20
+                val cellSize = minOf(
+                    canvasAvailableWidth / fixedGridSize,
+                    canvasAvailableHeight / fixedGridSize
+                )
+                Triple(fixedGridSize, fixedGridSize, cellSize)
+            }
+            
+            // 计算棋盘实际宽高
             val canvasWidth = cellSizePx * gridW
             val canvasHeight = cellSizePx * gridH
+            
+            // 计算居中偏移量
+            val horizontalOffset = (availableWidth - canvasWidth) / 2
+            val verticalOffset = (availableHeight - canvasHeight + topPaddingForProgress.toPx()) / 2
 
             // 监听动态棋盘逻辑，同步更新 State
             LaunchedEffect(gridW, gridH) {
@@ -175,81 +321,124 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
                 }
             }
 
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Box(
-                    modifier = Modifier
-                        .size((canvasWidth / density).dp, (canvasHeight / density).dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(colorScheme.surfaceVariant.copy(0.3f))
-                        .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                onStateChange(handleInput(currentState, drag.x, drag.y))
-                            }
-                        }
-                ) {
-                    Canvas(Modifier.fillMaxSize()) {
-                        if (settings.showGrid) {
-                            for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, canvasHeight))
-                            for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(canvasWidth, i * cellSizePx))
-                        }
-                        
-                        state.objects.forEach { obj ->
-                            drawCircle(obj.type.color, cellSizePx * 0.35f, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
-                        }
-                        
-                        state.snake.forEachIndexed { i, p ->
-                            val alpha = (1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)
-                            val color = when {
-                                i == 0 && (state.ghostTimeRemaining > 0 || settings.isGhostPermanent) -> ItemType.GHOST.color
-                                i == 0 && state.shieldCount > 0 -> ItemType.SHIELD.color
-                                i == 0 -> colorScheme.primary
-                                else -> colorScheme.primary
-                            }
-                            drawRoundRect(
-                                color = color.copy(alpha = alpha),
-                                topLeft = Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f),
-                                size = Size(cellSizePx - 3f, cellSizePx - 3f),
-                                cornerRadius = CornerRadius(4.dp.toPx())
-                            )
-                        }
-                        
-                        // Ghost 进度条
-                        if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
-                            val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
-                            drawRect(
-                                color = ItemType.GHOST.color.copy(0.3f),
-                                topLeft = Offset(0f, canvasHeight - 3.dp.toPx()),
-                                size = Size(canvasWidth, 3.dp.toPx())
-                            )
-                            drawRect(
-                                color = ItemType.GHOST.color,
-                                topLeft = Offset(0f, canvasHeight - 3.dp.toPx()),
-                                size = Size(canvasWidth * progress, 3.dp.toPx())
-                            )
-                        }
+            // 棋盘顶部区域：道具进度条
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(topPaddingForProgress)
+                    .padding(horizontal = horizontalOffset.dp)
+                    .offset(y = (verticalOffset - canvasHeight / 2 - topPaddingForProgress.toPx() / 2).dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // Ghost 进度条 - 移到棋盘顶部
+                if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
+                    val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(colorScheme.surfaceVariant.copy(0.3f))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progress)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(ItemType.GHOST.color)
+                        )
                     }
+                }
+            }
 
-                    // 护盾指示 (右上角)
-                    if (state.shieldCount > 0) {
-                        Surface(
-                            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                            color = ItemType.SHIELD.color,
-                            shape = RoundedCornerShape(6.dp),
-                            shadowElevation = 4.dp
+            // 棋盘主体
+            Box(
+                modifier = Modifier
+                    .width((canvasWidth / density).dp)
+                    .height((canvasHeight / density).dp)
+                    .offset(x = horizontalOffset.dp, y = verticalOffset.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(colorScheme.surfaceVariant.copy(0.3f))
+                    .pointerInput(state.isStarted, state.isPaused, state.isGameOver) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            onStateChange(handleInput(currentState, drag.x, drag.y))
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(Modifier.fillMaxSize()) {
+                    if (settings.showGrid) {
+                        for (i in 0..gridW) drawLine(
+                            colorScheme.onSurface.copy(0.05f), 
+                            Offset(i * cellSizePx, 0f), 
+                            Offset(i * cellSizePx, canvasHeight)
+                        )
+                        for (i in 0..gridH) drawLine(
+                            colorScheme.onSurface.copy(0.05f), 
+                            Offset(0f, i * cellSizePx), 
+                            Offset(canvasWidth, i * cellSizePx)
+                        )
+                    }
+                    
+                    state.objects.forEach { obj ->
+                        drawCircle(
+                            obj.type.color, 
+                            cellSizePx * 0.35f, 
+                            Offset(
+                                obj.pos.first * cellSizePx + cellSizePx / 2f, 
+                                obj.pos.second * cellSizePx + cellSizePx / 2f
+                            )
+                        )
+                    }
+                    
+                    state.snake.forEachIndexed { i, p ->
+                        val alpha = (1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)
+                        val color = when {
+                            i == 0 && (state.ghostTimeRemaining > 0 || settings.isGhostPermanent) -> ItemType.GHOST.color
+                            i == 0 && state.shieldCount > 0 -> ItemType.SHIELD.color
+                            i == 0 -> colorScheme.primary
+                            else -> colorScheme.primary
+                        }
+                        drawRoundRect(
+                            color = color.copy(alpha = alpha),
+                            topLeft = Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f),
+                            size = Size(cellSizePx - 3f, cellSizePx - 3f),
+                            cornerRadius = CornerRadius(4.dp.toPx())
+                        )
+                    }
+                }
+
+                // 护盾指示 (右上角)
+                if (state.shieldCount > 0) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                        color = ItemType.SHIELD.color,
+                        shape = RoundedCornerShape(6.dp),
+                        shadowElevation = 4.dp
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 6.dp, vertical = 2.dp), 
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Shield, null, Modifier.size(12.dp), tint = Color.White)
-                                Spacer(Modifier.width(4.dp))
-                                Text("${state.shieldCount}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
-                            }
+                            Icon(Icons.Default.Shield, null, Modifier.size(12.dp), tint = Color.White)
+                            Spacer(Modifier.width(4.dp))
+                            Text("${state.shieldCount}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                         }
                     }
+                }
 
-                    if (!state.isStarted) {
-                        Button(onClick = { onStateChange(state.copy(isStarted = true)) }, Modifier.align(Alignment.Center)) {
-                            Text("START")
-                        }
+                if (!state.isStarted) {
+                    Button(
+                        onClick = { 
+                            onStateChange(state.copy(isStarted = true))
+                            if (settings.enableVibration) {
+                                vibrateShort(LocalContext.current)
+                            }
+                        }, 
+                        Modifier.align(Alignment.Center)
+                    ) {
+                        Text("START")
                     }
                 }
             }
@@ -257,9 +446,19 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
     }
 
     if (state.isGameOver) {
-        ResultDialog(state) { onStateChange(SnakeState(highScore = state.highScore, isStarted = true)) }
+        ResultDialog(state) { 
+            onStateChange(SnakeState(highScore = state.highScore, isStarted = true))
+            if (settings.enableVibration) {
+                vibrateShort(LocalContext.current)
+            }
+        }
     } else if (state.isPaused) {
-        PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
+        PauseStatsDialog(state) { 
+            onStateChange(state.copy(isPaused = false))
+            if (settings.enableVibration) {
+                vibrateShort(LocalContext.current)
+            }
+        }
     }
 }
 
@@ -274,7 +473,15 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                 SettingToggle("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
                 SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
                 SettingToggle("Dynamic Grid", settings.dynamicGrid) { onUpdate(settings.copy(dynamicGrid = it)) }
+                SettingToggle("Vibration", settings.enableVibration) { onUpdate(settings.copy(enableVibration = it)) }
                 SettingToggle("Ghost Permanent", settings.isGhostPermanent) { onUpdate(settings.copy(isGhostPermanent = it)) }
+                SliderSetting(
+                    label = "Max Objects",
+                    value = settings.maxObjects.toFloat(),
+                    valueRange = 1f..10f,
+                    steps = 8,
+                    onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }
+                )
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 Text("Enabled Items", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 ItemType.entries.forEach { type ->
@@ -284,9 +491,14 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                             Spacer(Modifier.width(8.dp))
                             Text(type.label, fontSize = 14.sp)
                         }
-                        Checkbox(checked = settings.enabledItems[type] == true, onCheckedChange = {
-                            val m = settings.enabledItems.toMutableMap(); m[type] = it; onUpdate(settings.copy(enabledItems = m))
-                        })
+                        Checkbox(
+                            checked = settings.enabledItems[type] == true, 
+                            onCheckedChange = {
+                                val m = settings.enabledItems.toMutableMap()
+                                m[type] = it
+                                onUpdate(settings.copy(enabledItems = m))
+                            }
+                        )
                     }
                 }
             }
@@ -311,12 +523,48 @@ fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) ->
 }
 
 @Composable
+fun SliderSetting(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int = 0,
+    onValueChange: (Float) -> Unit
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+            Text(label, fontSize = 14.sp)
+            Text(value.toInt().toString(), fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps
+        )
+    }
+}
+
+@Composable
 fun ResultDialog(state: SnakeState, onRestart: () -> Unit) {
-    AlertDialog(onDismissRequest = {}, confirmButton = { Button(onClick = onRestart) { Text("REPLAY") } },
+    AlertDialog(
+        onDismissRequest = {}, 
+        confirmButton = { 
+            Button(onClick = onRestart) { 
+                Text("REPLAY") 
+            } 
+        },
         title = { Text("Game Over") },
         text = { 
-            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { 
-                Text("${state.score}", fontSize = 56.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary) 
+            Column(
+                modifier = Modifier.fillMaxWidth(), 
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) { 
+                Text(
+                    "${state.score}", 
+                    fontSize = 56.sp, 
+                    fontWeight = FontWeight.Black, 
+                    color = MaterialTheme.colorScheme.primary
+                ) 
                 StatsList(state.itemsCollected)
             } 
         }
@@ -325,7 +573,13 @@ fun ResultDialog(state: SnakeState, onRestart: () -> Unit) {
 
 @Composable
 fun PauseStatsDialog(state: SnakeState, onResume: () -> Unit) {
-    AlertDialog(onDismissRequest = onResume, confirmButton = { Button(onClick = onResume) { Text("RESUME") } },
+    AlertDialog(
+        onDismissRequest = onResume, 
+        confirmButton = { 
+            Button(onClick = onResume) { 
+                Text("RESUME") 
+            } 
+        },
         title = { Text("Paused") }, 
         text = { 
             Column {
@@ -341,7 +595,10 @@ fun PauseStatsDialog(state: SnakeState, onResume: () -> Unit) {
 fun StatsList(items: Map<ItemType, Int>) {
     Column {
         items.filter { it.value > 0 }.forEach { (type, count) ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically, 
+                modifier = Modifier.padding(vertical = 2.dp)
+            ) {
                 Icon(type.icon, null, Modifier.size(16.dp), tint = type.color)
                 Spacer(Modifier.width(8.dp))
                 Text("${type.label}: $count", fontSize = 12.sp)
