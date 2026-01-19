@@ -29,7 +29,7 @@ data class GameSettings(
     val showGrid: Boolean = true,
     val isLoopMode: Boolean = false,
     val dynamicGrid: Boolean = true,
-    val enableVibration: Boolean = true,
+    val enableVibration: Boolean = true, // 振动开关
     val maxObjects: Int = 5,
     val isGhostPermanent: Boolean = false,
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
@@ -49,26 +49,27 @@ data class SnakeState(
     val gridHeight: Int = 20,
     val speedModifier: Long = 0,
     val shieldCount: Int = 0,
-    val ghostTimeRemaining: Long = 0L 
+    val ghostTimeRemaining: Long = 0L,
+    val lastEvent: GameEvent? = null // 用于触发 UI 层的副作用（如振动）
 )
+
+enum class GameEvent { EAT_GOOD, EAT_BAD, HIT_WALL, SHIELD_LOST }
 
 fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): SnakeState {
     if (state.isGameOver || state.isPaused || !state.isStarted) return state
     
     val head = state.snake.first()
     var nX = when (state.direction) { 
-        Direction.LEFT -> head.first - 1 
-        Direction.RIGHT -> head.first + 1 
-        else -> head.first 
+        Direction.LEFT -> head.first - 1; Direction.RIGHT -> head.first + 1; else -> head.first 
     }
     var nY = when (state.direction) { 
-        Direction.UP -> head.second - 1 
-        Direction.DOWN -> head.second + 1 
-        else -> head.second 
+        Direction.UP -> head.second - 1; Direction.DOWN -> head.second + 1; else -> head.second 
     }
 
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0
+    var event: GameEvent? = null
 
+    // 边界与死亡检测
     var hitWall = false
     if (settings.isLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -82,10 +83,9 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
 
     if (hitWall || hitSelf) {
         return if (state.shieldCount > 0) {
-            // 护盾消耗逻辑
-            state.copy(shieldCount = state.shieldCount - 1)
+            state.copy(shieldCount = state.shieldCount - 1, lastEvent = GameEvent.SHIELD_LOST)
         } else {
-            state.copy(isGameOver = true)
+            state.copy(isGameOver = true, lastEvent = GameEvent.HIT_WALL)
         }
     }
 
@@ -103,6 +103,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
         remainingObjects.remove(hitObject)
         sc += hitObject.type.score
         ic[hitObject.type] = (ic[hitObject.type] ?: 0) + 1
+        event = if (hitObject.type.score >= 0) GameEvent.EAT_GOOD else GameEvent.EAT_BAD
         
         when (hitObject.type) {
             ItemType.SLOW -> sm += 15
@@ -115,6 +116,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
         nS.removeAt(nS.size - 1)
     }
 
+    // 随机生成
     val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
     if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.15f && allowedTypes.isNotEmpty()) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
@@ -129,6 +131,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, tickDuration: Long): Sna
 
     return state.copy(
         snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), 
-        itemsCollected = ic, speedModifier = sm, shieldCount = sCount, ghostTimeRemaining = gTime
+        itemsCollected = ic, speedModifier = sm, shieldCount = sCount, 
+        ghostTimeRemaining = gTime, lastEvent = event
     )
 }
