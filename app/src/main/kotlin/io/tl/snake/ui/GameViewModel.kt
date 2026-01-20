@@ -17,7 +17,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var settings by mutableStateOf(GameSettings())
         private set
-    var countdown by mutableStateOf(0) // 0 表示不在倒计时中
+    var countdown by mutableStateOf(0) 
         private set
 
     init {
@@ -75,12 +75,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startResumeCountdown() {
-        viewModelScope.launch {
-            countdown = 3
-            while (countdown > 0) {
-                delay(1000)
-                countdown--
+        // 只有游戏已经开始，才执行倒计时恢复逻辑
+        if (state.isStarted && !state.isGameOver) {
+            viewModelScope.launch {
+                countdown = 3
+                while (countdown > 0) {
+                    delay(1000)
+                    countdown--
+                }
+                state = state.copy(isPaused = false)
             }
+        } else {
+            // 否则单纯关闭暂停状态
             state = state.copy(isPaused = false)
         }
     }
@@ -106,8 +112,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun togglePause() { 
-        if (!state.isPaused) state = state.copy(isPaused = true)
-        else startResumeCountdown()
+        if (!state.isPaused) {
+            state = state.copy(isPaused = true)
+        } else {
+            startResumeCountdown()
+        }
     }
 
     fun setPaused(paused: Boolean) { state = state.copy(isPaused = paused) }

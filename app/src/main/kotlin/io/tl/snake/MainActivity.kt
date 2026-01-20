@@ -64,25 +64,28 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Scaffold(
-                    topBar = { GameTopBar(state, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
-                ) { p ->
-                    Box(Modifier.padding(p).fillMaxSize()) {
-                        GameContent(state, settings, vm)
-                        
-                        if (showSettings) {
-                            SettingsDialog(settings, onDismiss = { showSettings = false; vm.startResumeCountdown() }, onUpdate = { vm.updateSettings(it) })
+                // 最外层 Box 确保倒计时遮罩可以覆盖 TopBar
+                Box(Modifier.fillMaxSize()) {
+                    Scaffold(
+                        topBar = { GameTopBar(state, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
+                    ) { p ->
+                        Box(Modifier.padding(p).fillMaxSize()) {
+                            GameContent(state, settings, vm)
+                            
+                            if (showSettings) {
+                                SettingsDialog(settings, onDismiss = { showSettings = false; vm.startResumeCountdown() }, onUpdate = { vm.updateSettings(it) })
+                            }
+                            if (state.isGameOver) {
+                                ResultDialog(state, onRestart = { vm.restartGame() }, onOpenSettings = { showSettings = true })
+                            } else if (state.isPaused && vm.countdown == 0 && !showSettings) {
+                                PauseStatsDialog(state) { vm.togglePause() }
+                            }
                         }
-                        if (state.isGameOver) {
-                            ResultDialog(state, onRestart = { vm.restartGame() }, onOpenSettings = { showSettings = true })
-                        } else if (state.isPaused && vm.countdown == 0 && !showSettings) {
-                            PauseStatsDialog(state) { vm.togglePause() }
-                        }
+                    }
 
-                        // 全屏倒计时遮罩
-                        if (vm.countdown > 0) {
-                            CountdownOverlay(vm.countdown)
-                        }
+                    // 全屏遮罩：位于 Box 顶层，无视 Scaffold 边界，覆盖 TopBar
+                    if (vm.countdown > 0) {
+                        CountdownOverlay(vm.countdown)
                     }
                 }
             }
@@ -92,19 +95,20 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CountdownOverlay(count: Int) {
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.4f)), contentAlignment = Alignment.Center) {
+    // 使用全屏铺满 + 较高 z-index 效果
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.5f)).pointerInput(Unit) {}, contentAlignment = Alignment.Center) {
         AnimatedContent(
             targetState = count,
             transitionSpec = {
-                (scaleIn(tween(400)) + fadeIn()).togetherWith(scaleOut(tween(400)) + fadeOut())
-            }, label = ""
+                (scaleIn(tween(500, easing = EaseOutBack)) + fadeIn()).togetherWith(scaleOut(tween(500)) + fadeOut())
+            }, label = "countdown_anim"
         ) { targetCount ->
             Text(
                 text = "$targetCount",
-                fontSize = 120.sp,
+                fontSize = 140.sp,
                 fontWeight = FontWeight.Black,
                 color = Color.White,
-                style = MaterialTheme.typography.displayLarge
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -125,29 +129,29 @@ fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel) {
 fun ControlButtonsRow(onDirChange: (Direction) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
         val size = 56.dp
-        val colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(0.7f))
+        val containerColor = MaterialTheme.colorScheme.primaryContainer.copy(0.7f)
         
-        IconButton(onClick = { onDirChange(Direction.LEFT) }, modifier = Modifier.size(size).background(colors.containerColor, CircleShape)) {
-            Icon(Icons.Default.ArrowBack, "L")
+        // 提取统一的按钮样式
+        @Composable
+        fun DirIconButton(icon: ImageVector, dir: Direction) {
+            IconButton(onClick = { onDirChange(dir) }, modifier = Modifier.size(size).background(containerColor, CircleShape)) {
+                Icon(icon, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
         }
-        IconButton(onClick = { onDirChange(Direction.UP) }, modifier = Modifier.size(size).background(colors.containerColor, CircleShape)) {
-            Icon(Icons.Default.ArrowUpward, "U")
-        }
-        IconButton(onClick = { onDirChange(Direction.DOWN) }, modifier = Modifier.size(size).background(colors.containerColor, CircleShape)) {
-            Icon(Icons.Default.ArrowDownward, "D")
-        }
-        IconButton(onClick = { onDirChange(Direction.RIGHT) }, modifier = Modifier.size(size).background(colors.containerColor, CircleShape)) {
-            Icon(Icons.Default.ArrowForward, "R")
-        }
+
+        DirIconButton(Icons.Default.ArrowBack, Direction.LEFT)
+        DirIconButton(Icons.Default.ArrowUpward, Direction.UP)
+        DirIconButton(Icons.Default.ArrowDownward, Direction.DOWN)
+        DirIconButton(Icons.Default.ArrowForward, Direction.RIGHT)
     }
 }
 
 @Composable
 fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel) {
     val colorScheme = MaterialTheme.colorScheme
-    val infiniteTransition = rememberInfiniteTransition("")
-    val decayAlpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(200), RepeatMode.Reverse), "")
-    val decayScale by infiniteTransition.animateFloat(0.8f, 1.2f, infiniteRepeatable(tween(400), RepeatMode.Reverse), "")
+    val infiniteTransition = rememberInfiniteTransition("game_anim")
+    val decayAlpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(200), RepeatMode.Reverse), "flash")
+    val decayScale by infiniteTransition.animateFloat(0.8f, 1.2f, infiniteRepeatable(tween(400), RepeatMode.Reverse), "breath")
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalContext.current.resources.displayMetrics.density
@@ -202,7 +206,6 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
         title = { Text("Configuration", fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                // Control Mode Chip 设计
                 Row(Modifier.fillMaxWidth().height(56.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Text("Control Mode", fontSize = 14.sp)
                     Surface(
@@ -211,7 +214,7 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                         shape = RoundedCornerShape(24.dp)
                     ) {
                         Text(
-                            text = if (settings.controlMode == ControlMode.SWIPE) "Swipe" else "Buttonl",
+                            text = if (settings.controlMode == ControlMode.SWIPE) "Swipe Focus" else "Button Control",
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -311,7 +314,7 @@ fun StatsList(items: Map<ItemType, Int>) {
 @Composable
 fun ConfettiEffect() {
     val particles = remember { List(60) { ConfettiParticle() } }
-    val infiniteTransition = rememberInfiniteTransition("")
+    val infiniteTransition = rememberInfiniteTransition("confetti")
     val progress by infiniteTransition.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing)), "")
     Canvas(Modifier.fillMaxSize()) {
         particles.forEach { p ->
