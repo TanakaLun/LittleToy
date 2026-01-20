@@ -11,8 +11,6 @@ object GameConfig {
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
-
-// 新增控制模式枚举
 enum class ControlMode { SWIPE, BUTTONS }
 
 enum class ItemType(val colorHex: Long, val score: Int, val weight: Float, val label: String) {
@@ -39,7 +37,7 @@ data class GameSettings(
     val isGhostPermanent: Boolean = false,
     val enableItemDecay: Boolean = true,
     val targetCellSize: Float = 22f,
-    val controlMode: ControlMode = ControlMode.SWIPE, // 新增：控制模式
+    val controlMode: ControlMode = ControlMode.SWIPE,
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
@@ -139,6 +137,5 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
             remainingObjects.add(GameObject(newPos, selectedType))
         }
     }
-
     return state.copy(snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), itemsCollected = ic, speedModifier = sm, shieldCount = sCount, ghostTimeRemaining = gTime, invincibleTimeRemaining = iTime, lastEvent = null)
 }

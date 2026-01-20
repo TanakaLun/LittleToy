@@ -17,6 +17,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var settings by mutableStateOf(GameSettings())
         private set
+    var countdown by mutableStateOf(0) // 0 表示不在倒计时中
+        private set
 
     init {
         loadData()
@@ -49,18 +51,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun saveData() {
         val json = JSONObject().apply {
-            put("showGrid", settings.showGrid)
-            put("isLoopMode", settings.isLoopMode)
-            put("dynamicGrid", settings.dynamicGrid)
-            put("enableVibration", settings.enableVibration)
-            put("maxObjects", settings.maxObjects)
-            put("enableItemDecay", settings.enableItemDecay)
-            put("targetCellSize", settings.targetCellSize.toDouble())
-            put("isGhostPermanent", settings.isGhostPermanent)
+            put("showGrid", settings.showGrid); put("isLoopMode", settings.isLoopMode)
+            put("dynamicGrid", settings.dynamicGrid); put("enableVibration", settings.enableVibration)
+            put("maxObjects", settings.maxObjects); put("enableItemDecay", settings.enableItemDecay)
+            put("targetCellSize", settings.targetCellSize.toDouble()); put("isGhostPermanent", settings.isGhostPermanent)
             put("controlMode", settings.controlMode.name)
-            put("enabledItems", JSONObject().apply { 
-                settings.enabledItems.forEach { (k, v) -> put(k.name, v) } 
-            })
+            put("enabledItems", JSONObject().apply { settings.enabledItems.forEach { (k, v) -> put(k.name, v) } })
         }
         sp.edit().putString("settings", json.toString()).putInt("hs", state.highScore).apply()
     }
@@ -68,7 +64,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun startGameLoop() {
         viewModelScope.launch {
             while (true) {
-                if (state.isStarted && !state.isPaused && !state.isGameOver) {
+                if (state.isStarted && !state.isPaused && !state.isGameOver && countdown == 0) {
                     val speed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
                     delay(speed)
                     state = gameTick(state, settings)
@@ -78,7 +74,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // 处理滑动方向
+    fun startResumeCountdown() {
+        viewModelScope.launch {
+            countdown = 3
+            while (countdown > 0) {
+                delay(1000)
+                countdown--
+            }
+            state = state.copy(isPaused = false)
+        }
+    }
+
     fun handleSwipe(dx: Float, dy: Float) {
         val newDir = when {
             kotlin.math.abs(dx) > kotlin.math.abs(dy) -> 
@@ -91,18 +97,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         state = state.copy(direction = newDir)
     }
 
-    // 直接设置方向（按钮使用）
     fun setDirection(dir: Direction) {
         val isValid = when (dir) {
-            Direction.UP -> state.direction != Direction.DOWN
-            Direction.DOWN -> state.direction != Direction.UP
-            Direction.LEFT -> state.direction != Direction.RIGHT
-            Direction.RIGHT -> state.direction != Direction.LEFT
+            Direction.UP -> state.direction != Direction.DOWN; Direction.DOWN -> state.direction != Direction.UP
+            Direction.LEFT -> state.direction != Direction.RIGHT; Direction.RIGHT -> state.direction != Direction.LEFT
         }
         if (isValid) state = state.copy(direction = dir)
     }
 
-    fun togglePause() { state = state.copy(isPaused = !state.isPaused) }
+    fun togglePause() { 
+        if (!state.isPaused) state = state.copy(isPaused = true)
+        else startResumeCountdown()
+    }
+
     fun setPaused(paused: Boolean) { state = state.copy(isPaused = paused) }
     fun startGame() { state = state.copy(isStarted = true) }
     fun restartGame() {
