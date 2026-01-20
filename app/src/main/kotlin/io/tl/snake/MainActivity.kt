@@ -19,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -54,12 +53,11 @@ class MainActivity : ComponentActivity() {
                 var persistentHS by remember { mutableStateOf(sp.getInt("hs", 0)) }
                 var state by remember { mutableStateOf(SnakeState(highScore = persistentHS)) }
 
-                // 振动副作用
                 LaunchedEffect(state.lastEvent) {
                     if (settings.enableVibration) {
                         when (state.lastEvent) {
                             GameEvent.EAT_GOOD -> doVibrate(30L)
-                            GameEvent.EAT_BAD -> doVibrate(70L)
+                            GameEvent.EAT_BAD -> doVibrate(80L)
                             GameEvent.SHIELD_BREAK -> doVibrate(150L)
                             GameEvent.HIT_WALL -> doVibrate(250L)
                             else -> {}
@@ -70,16 +68,13 @@ class MainActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         Box(Modifier.fillMaxWidth().statusBarsPadding().height(70.dp)) {
-                            // 左侧 Chip 组
                             Column(Modifier.align(Alignment.CenterStart).padding(start = 16.dp)) {
                                 ScoreChip(Icons.Default.EmojiEvents, "HI", if(state.score > persistentHS) state.score else persistentHS, MaterialTheme.colorScheme.outline) {
                                     persistentHS = 0; sp.edit().putInt("hs", 0).apply(); doVibrate(100L)
                                 }
                                 ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary)
                             }
-                            // 标题
                             Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center))
-                            // 右侧按钮
                             Row(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
                                 if (state.isStarted && !state.isGameOver) {
                                     IconButton(onClick = { state = state.copy(isPaused = !state.isPaused) }) {
@@ -153,7 +148,6 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
     val currentState by rememberUpdatedState(state)
     val isNewRecord = state.isGameOver && state.score > state.highScore
 
-    // 道具特效动画
     val infiniteTransition = rememberInfiniteTransition(label = "decay")
     val decayAlpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(200), RepeatMode.Reverse), "flash")
     val decayScale by infiniteTransition.animateFloat(0.8f, 1.2f, infiniteRepeatable(tween(400), RepeatMode.Reverse), "breath")
@@ -169,11 +163,8 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
     BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 32.dp)) {
         val density = LocalContext.current.resources.displayMetrics.density
         val cellSizePx = settings.targetCellSize * density
-        
-        // 核心：计算行列数与画布尺寸的严格映射
         val gridW = if (settings.dynamicGrid) (constraints.maxWidth / cellSizePx).toInt().coerceAtLeast(10) else 20
         val gridH = if (settings.dynamicGrid) (constraints.maxHeight / cellSizePx).toInt().coerceAtLeast(10) else 20
-        
         val finalW = cellSizePx * gridW
         val finalH = cellSizePx * gridH
 
@@ -183,12 +174,8 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
         }
 
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // 护盾指示器（右上角外部）
             if (state.shieldCount > 0) {
-                Surface(
-                    modifier = Modifier.align(Alignment.TopEnd).offset(y = (-38).dp), 
-                    color = ItemType.SHIELD.color, shape = RoundedCornerShape(8.dp), shadowElevation = 3.dp
-                ) {
+                Surface(modifier = Modifier.align(Alignment.TopEnd).offset(y = (-38.dp)), color = ItemType.SHIELD.color, shape = RoundedCornerShape(8.dp), shadowElevation = 3.dp) {
                     Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Shield, null, Modifier.size(14.dp), tint = Color.White)
                         Text("${state.shieldCount}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 4.dp))
@@ -204,14 +191,12 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
                         for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, finalH))
                         for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(finalW, i * cellSizePx))
                     }
-                    
                     state.objects.forEach { obj ->
                         val isExpiring = settings.enableItemDecay && obj.timeLeft < 5000L
                         val alpha = if (isExpiring) decayAlpha else 1f
                         val scale = if (isExpiring) decayScale else 1f
                         drawCircle(obj.type.color.copy(alpha), (cellSizePx * 0.35f) * scale, Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
                     }
-                    
                     state.snake.forEachIndexed { i, p ->
                         val isInvincible = state.invincibleTimeRemaining > 0
                         val alpha = (1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)
@@ -223,8 +208,6 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
                         }
                         drawRoundRect(color.copy(alpha), Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f), Size(cellSizePx - 3f, cellSizePx - 3f), CornerRadius(4.dp.toPx()))
                     }
-
-                    // 进度条（置顶）
                     val effectTime = if (state.invincibleTimeRemaining > 0) state.invincibleTimeRemaining else state.ghostTimeRemaining
                     val effectMax = if (state.invincibleTimeRemaining > 0) GameConfig.INVINCIBLE_DURATION_MS else GameConfig.GHOST_DURATION_MS
                     if (effectTime > 0 && !settings.isGhostPermanent) {
@@ -237,19 +220,21 @@ fun GameContent(state: SnakeState, settings: GameSettings, onStateChange: (Snake
                 if (!state.isStarted) Button(onClick = { onStateChange(state.copy(isStarted = true)) }, Modifier.align(Alignment.Center)) { Text("START") }
             }
         }
-
         if (isNewRecord) ConfettiEffect()
     }
 
-    if (state.isGameOver) ResultDialog(state) { onStateChange(SnakeState(highScore = state.highScore, isStarted = true, gridWidth = state.gridWidth, gridHeight = state.gridHeight)) }
-    else if (state.isPaused) PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
+    if (state.isGameOver) {
+        ResultDialog(state, onRestart = { onStateChange(SnakeState(highScore = state.highScore, isStarted = true, gridWidth = state.gridWidth, gridHeight = state.gridHeight)) }, onOpenSettings = { onStateChange(state.copy(isPaused = true)) }) 
+    } else if (state.isPaused) {
+        PauseStatsDialog(state) { onStateChange(state.copy(isPaused = false)) }
+    }
 }
 
 @Composable
 fun ConfettiEffect() {
     val particles = remember { List(60) { ConfettiParticle() } }
     val infiniteTransition = rememberInfiniteTransition()
-    val progress by infiniteTransition.animateFloat(initialValue = 0f, targetValue = 1f, animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing)))
+    val progress by infiniteTransition.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing)))
     Canvas(Modifier.fillMaxSize()) {
         particles.forEach { p ->
             val y = (p.startY + (progress * 1800f * p.speed)) % size.height
@@ -270,23 +255,16 @@ class ConfettiParticle {
 @Composable
 fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
     AlertDialog(onDismissRequest = onDismiss, confirmButton = { Button(onClick = onDismiss) { Text("OK") } },
-        title = { Text("Game Config", fontWeight = FontWeight.Bold) },
+        title = { Text("Configuration", fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                SettingToggle("Show Grid", settings.showGrid) { onUpdate(settings.copy(showGrid = it)) }
                 SettingToggle("Loop Mode", settings.isLoopMode) { onUpdate(settings.copy(isLoopMode = it)) }
-                SettingToggle("Dynamic Grid", settings.dynamicGrid) { onUpdate(settings.copy(dynamicGrid = it)) }
                 SettingToggle("Vibration", settings.enableVibration) { onUpdate(settings.copy(enableVibration = it)) }
                 SettingToggle("Item Decay", settings.enableItemDecay) { onUpdate(settings.copy(enableItemDecay = it)) }
-                SettingToggle("Ghost Permanent", settings.isGhostPermanent) { onUpdate(settings.copy(isGhostPermanent = it)) }
-                
-                Spacer(Modifier.height(12.dp))
                 Text("Max Items: ${settings.maxObjects}", style = MaterialTheme.typography.labelMedium)
                 Slider(value = settings.maxObjects.toFloat(), onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }, valueRange = 0f..15f, steps = 14)
-                
                 Text("Cell Size: ${settings.targetCellSize.toInt()}dp", style = MaterialTheme.typography.labelMedium)
                 Slider(value = settings.targetCellSize, onValueChange = { onUpdate(settings.copy(targetCellSize = it)) }, valueRange = 16f..40f)
-
                 HorizontalDivider(Modifier.padding(vertical = 12.dp))
                 ItemType.entries.forEach { type ->
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -320,13 +298,23 @@ fun SettingToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) ->
 }
 
 @Composable
-fun ResultDialog(state: SnakeState, onRestart: () -> Unit) {
-    AlertDialog(onDismissRequest = {}, confirmButton = { Button(onClick = onRestart) { Text("REPLAY") } },
-        title = { Text("Game Over") },
-        text = { Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("${state.score}", fontSize = 52.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
-            StatsList(state.itemsCollected)
-        }}
+fun ResultDialog(state: SnakeState, onRestart: () -> Unit, onOpenSettings: () -> Unit) {
+    AlertDialog(onDismissRequest = {}, 
+        confirmButton = {
+            Row {
+                TextButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, null); Spacer(Modifier.width(4.dp)); Text("SETTINGS") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onRestart) { Icon(Icons.Default.Replay, null); Spacer(Modifier.width(4.dp)); Text("REPLAY") }
+            }
+        },
+        title = { Text("Game Over", fontWeight = FontWeight.Bold) },
+        text = { 
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("${state.score}", fontSize = 52.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(16.dp))
+                StatsList(state.itemsCollected)
+            }
+        }
     )
 }
 
@@ -334,17 +322,37 @@ fun ResultDialog(state: SnakeState, onRestart: () -> Unit) {
 fun PauseStatsDialog(state: SnakeState, onResume: () -> Unit) {
     AlertDialog(onDismissRequest = onResume, confirmButton = { Button(onClick = onResume) { Text("RESUME") } },
         title = { Text("Paused") }, 
-        text = { Column { Text("Score: ${state.score}", fontWeight = FontWeight.Bold); Spacer(Modifier.height(8.dp)); StatsList(state.itemsCollected) } }
+        text = { Column { Text("Score: ${state.score}", fontWeight = FontWeight.Bold); Spacer(Modifier.height(12.dp)); StatsList(state.itemsCollected) } }
     )
 }
 
 @Composable
 fun StatsList(items: Map<ItemType, Int>) {
-    Column {
-        items.filter { it.value > 0 }.forEach { (type, count) ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                Icon(type.icon, null, Modifier.size(16.dp), tint = type.color)
-                Text("${type.label}: $count", Modifier.padding(start = 8.dp), fontSize = 13.sp)
+    val collected = items.filter { it.value > 0 }.toList()
+    if (collected.isEmpty()) return
+    
+    // 如果超过两种物品，使用两列布局
+    if (collected.size >= 2) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            collected.chunked(2).forEach { rowItems ->
+                Row(Modifier.fillMaxWidth()) {
+                    rowItems.forEach { (type, count) ->
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(type.icon, null, Modifier.size(14.dp), tint = type.color)
+                            Text("${type.label}: $count", Modifier.padding(start = 4.dp), fontSize = 11.sp, maxLines = 1)
+                        }
+                    }
+                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    } else {
+        Column {
+            collected.forEach { (type, count) ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                    Icon(type.icon, null, Modifier.size(16.dp), tint = type.color)
+                    Text("${type.label}: $count", Modifier.padding(start = 8.dp), fontSize = 13.sp)
+                }
             }
         }
     }
