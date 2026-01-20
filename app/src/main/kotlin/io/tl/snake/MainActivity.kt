@@ -30,9 +30,8 @@ import io.tl.snake.logic.*
 import io.tl.snake.ui.GameViewModel
 import io.tl.snake.ui.theme.MyTheme
 import kotlin.random.Random
-import androidx.lifecycle.viewmodel.compose.viewModel
 
-// 扩展属性：将 Logic 的 ItemType 映射到 UI 图标
+// 扩展属性映射图标
 val ItemType.icon: ImageVector get() = when(this) {
     ItemType.FOOD_BASIC -> Icons.Default.Fastfood
     ItemType.FOOD_GOLD -> Icons.Default.Star
@@ -59,7 +58,6 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
                 val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
-                // 处理震动
                 LaunchedEffect(state.lastEvent) {
                     if (settings.enableVibration && state.lastEvent != null) {
                         val ms = when (state.lastEvent) {
@@ -76,23 +74,12 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     topBar = {
-                        GameTopBar(
-                            state = state, 
-                            onTogglePause = { vm.togglePause() }, 
-                            onOpenSettings = { vm.setPaused(true); showSettings = true },
-                            onResetHS = { vm.resetHighScore() }
-                        )
+                        GameTopBar(state, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() })
                     }
                 ) { p ->
                     Box(Modifier.padding(p).fillMaxSize()) {
                         GameCanvasArea(state, settings, vm)
-                        if (showSettings) {
-                            SettingsDialog(
-                                settings = settings, 
-                                onDismiss = { showSettings = false }, 
-                                onUpdate = { vm.updateSettings(it) }
-                            )
-                        }
+                        if (showSettings) SettingsDialog(settings, { showSettings = false }, { vm.updateSettings(it) })
                     }
                 }
             }
@@ -110,9 +97,7 @@ fun GameTopBar(state: SnakeState, onTogglePause: () -> Unit, onOpenSettings: () 
         Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center))
         Row(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
             if (state.isStarted && !state.isGameOver) {
-                IconButton(onClick = onTogglePause) {
-                    Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
-                }
+                IconButton(onClick = onTogglePause) { Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null) }
             }
             IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, null) }
         }
@@ -135,7 +120,6 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
         LaunchedEffect(gridW, gridH) { vm.updateGridSize(gridW, gridH) }
 
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // Shield UI
             if (state.shieldCount > 0) {
                 Surface(Modifier.align(Alignment.TopEnd).offset(y = (-38.dp)), color = Color(ItemType.SHIELD.colorHex), shape = RoundedCornerShape(8.dp)) {
                     Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -145,7 +129,6 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
                 }
             }
 
-            // Grid and Snake
             Box(Modifier.size((cellSizePx * gridW / density).dp, (cellSizePx * gridH / density).dp).clip(RoundedCornerShape(12.dp)).background(colorScheme.surfaceVariant.copy(0.3f)).border(1.dp, colorScheme.outlineVariant.copy(0.3f), RoundedCornerShape(12.dp))) {
                 Canvas(Modifier.fillMaxSize().pointerInput(Unit) {
                     detectDragGestures { change, drag -> change.consume(); vm.updateDirection(drag.x, drag.y) }
@@ -177,7 +160,7 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
     }
 
     if (state.isGameOver) {
-        ResultDialog(state, onRestart = { vm.restartGame() }, onOpenSettings = { vm.setPaused(true) })
+        ResultDialog(state, { vm.restartGame() }, { vm.setPaused(true) })
     } else if (state.isPaused) {
         PauseStatsDialog(state) { vm.setPaused(false) }
     }
