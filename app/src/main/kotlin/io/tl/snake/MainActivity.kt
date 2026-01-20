@@ -302,7 +302,7 @@ fun ResultDialog(state: SnakeState, onRestart: () -> Unit, onOpenSettings: () ->
     AlertDialog(onDismissRequest = {}, 
         confirmButton = {
             Row {
-                TextButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, null); Spacer(Modifier.width(4.dp)); Text("SETTINGS") }
+                Button(onClick = { onOpenSettings() }, { Icon(Icons.Default.Settings, null); Spacer(Modifier.width(4.dp)); Text("SETTINGS") }
                 Spacer(Modifier.width(8.dp))
                 Button(onClick = onRestart) { Icon(Icons.Default.Replay, null); Spacer(Modifier.width(4.dp)); Text("REPLAY") }
             }
@@ -331,27 +331,31 @@ fun StatsList(items: Map<ItemType, Int>) {
     val collected = items.filter { it.value > 0 }.toList()
     if (collected.isEmpty()) return
     
-    // 如果超过两种物品，使用两列布局
-    if (collected.size >= 2) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // 强制居中的两列/单列逻辑
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (collected.size >= 2) {
             collected.chunked(2).forEach { rowItems ->
-                Row(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth(), 
+                    horizontalArrangement = Arrangement.Center, // 关键：Row 内容整体居中
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     rowItems.forEach { (type, count) ->
-                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
                             Icon(type.icon, null, Modifier.size(14.dp), tint = type.color)
-                            Text("${type.label}: $count", Modifier.padding(start = 4.dp), fontSize = 11.sp, maxLines = 1)
+                            Text("${type.label}: $count", Modifier.padding(start = 4.dp), fontSize = 12.sp)
                         }
                     }
-                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
-        }
-    } else {
-        Column {
+        } else {
             collected.forEach { (type, count) ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
                     Icon(type.icon, null, Modifier.size(16.dp), tint = type.color)
-                    Text("${type.label}: $count", Modifier.padding(start = 8.dp), fontSize = 13.sp)
+                    Text("${type.label}: $count", Modifier.padding(start = 8.dp), fontSize = 14.sp)
                 }
             }
         }
