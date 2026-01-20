@@ -12,6 +12,9 @@ object GameConfig {
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 
+// 新增控制模式枚举
+enum class ControlMode { SWIPE, BUTTONS }
+
 enum class ItemType(val colorHex: Long, val score: Int, val weight: Float, val label: String) {
     FOOD_BASIC(0xFF4CAF50, 10, 0.6f, "Basic"),
     FOOD_GOLD(0xFFFFD700, 30, 0.12f, "Gold"),
@@ -36,6 +39,7 @@ data class GameSettings(
     val isGhostPermanent: Boolean = false,
     val enableItemDecay: Boolean = true,
     val targetCellSize: Float = 22f,
+    val controlMode: ControlMode = ControlMode.SWIPE, // 新增：控制模式
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
@@ -75,7 +79,6 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     val isInvincible = state.invincibleTimeRemaining > 0
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0 || isInvincible
     val activeLoopMode = settings.isLoopMode || isInvincible
-    var event: GameEvent? = null
 
     if (activeLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -109,7 +112,7 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     if (hitObject != null) {
         sc += hitObject.type.score
         ic[hitObject.type] = (ic[hitObject.type] ?: 0) + 1
-        event = if (hitObject.type.score >= 0) GameEvent.EAT_GOOD else GameEvent.EAT_BAD
+        val event = if (hitObject.type.score >= 0) GameEvent.EAT_GOOD else GameEvent.EAT_BAD
         when (hitObject.type) {
             ItemType.SLOW -> sm += 20
             ItemType.COFFEE -> sm += 40
@@ -120,6 +123,7 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
             else -> {}
         }
         if (hitObject.type.score <= 0) nS.removeAt(nS.size - 1)
+        return state.copy(snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), itemsCollected = ic, speedModifier = sm, shieldCount = sCount, ghostTimeRemaining = gTime, invincibleTimeRemaining = iTime, lastEvent = event)
     } else {
         nS.removeAt(nS.size - 1)
     }
@@ -136,9 +140,5 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
         }
     }
 
-    return state.copy(
-        snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), 
-        itemsCollected = ic, speedModifier = sm, shieldCount = sCount, 
-        ghostTimeRemaining = gTime, invincibleTimeRemaining = iTime, lastEvent = event
-    )
+    return state.copy(snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), itemsCollected = ic, speedModifier = sm, shieldCount = sCount, ghostTimeRemaining = gTime, invincibleTimeRemaining = iTime, lastEvent = null)
 }
