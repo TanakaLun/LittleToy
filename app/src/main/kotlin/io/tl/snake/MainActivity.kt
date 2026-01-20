@@ -30,6 +30,7 @@ import io.tl.snake.logic.*
 import io.tl.snake.ui.GameViewModel
 import io.tl.snake.ui.theme.MyTheme
 import kotlin.random.Random
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 // 扩展属性：将 Logic 的 ItemType 映射到 UI 图标
 val ItemType.icon: ImageVector get() = when(this) {
