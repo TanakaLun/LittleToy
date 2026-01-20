@@ -31,14 +31,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MyTheme {
-                // Game Heartbeat Loop
                 LaunchedEffect(state.isStarted, state.isPaused, state.isGameOver) {
                     while (state.isStarted && !state.isPaused && !state.isGameOver) {
                         val speed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
                         delay(speed)
                         val newState = gameTick(state, settings, nextDir)
-                        
-                        // Vibration logic
                         if (settings.enableVibration && newState.lastEvent != state.lastEvent) {
                             if (Build.VERSION.SDK_INT >= 26) vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
                             else vibrator.vibrate(50)
@@ -48,57 +45,28 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Surface {
-                    MainGameContent(
-                        state = state, 
-                        settings = settings, 
-                        onStateChange = { state = it },
-                        onDirectionChange = { dx, dy -> nextDir = InputHandler.handleSwipe(state.direction, dx, dy) }
-                    )
-
+                    MainGameContent(state, settings, { state = it }, { dx, dy -> nextDir = InputHandler.handleSwipe(state.direction, dx, dy) })
                     if (state.isGameOver) {
-                        ResultDialog(
-                            state = state, 
-                            onRestart = { 
-                                if (state.score > state.highScore) sp.edit().putInt("hs", state.score).apply()
-                                state = SnakeState(highScore = sp.getInt("hs", 0), isStarted = true)
-                                nextDir = Direction.UP 
-                            },
-                            onSettings = { showSettings = true }
-                        )
+                        ResultDialog(state, { 
+                            if (state.score > state.highScore) sp.edit().putInt("hs", state.score).apply()
+                            state = SnakeState(highScore = sp.getInt("hs", 0), isStarted = true)
+                            nextDir = Direction.UP 
+                        }, { showSettings = true })
                     }
-
-                    if (showSettings) {
-                        SettingsDialog(settings, { showSettings = false }, { settings = it; saveSettings(sp, it) })
-                    }
+                    if (showSettings) SettingsDialog(settings, { showSettings = false }, { settings = it; saveSettings(sp, it) })
                 }
             }
         }
     }
 
-    // Android TV Key Handling
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        // D-Pad Direction
-        InputHandler.handleKeyEvent(state.direction, keyCode)?.let {
-            nextDir = it
-            return true
-        }
-        
-        // Back Key -> Pause/Settings
+        InputHandler.handleKeyEvent(state.direction, keyCode)?.let { nextDir = it; return true }
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (state.isStarted && !state.isGameOver) {
-                state = state.copy(isPaused = true)
-                showSettings = true
-                return true
+                state = state.copy(isPaused = true); showSettings = true; return true
             }
         }
-        
-        // Menu Key -> Settings
-        if (keyCode == KeyEvent.KEYCODE_MENU) {
-            showSettings = true
-            state = state.copy(isPaused = true)
-            return true
-        }
-
+        if (keyCode == KeyEvent.KEYCODE_MENU) { showSettings = true; state = state.copy(isPaused = true); return true }
         return super.onKeyDown(keyCode, event)
     }
 
@@ -109,7 +77,6 @@ class MainActivity : ComponentActivity() {
         return GameSettings(
             showGrid = json.optBoolean("showGrid", true),
             isLoopMode = json.optBoolean("isLoopMode", false),
-            maxObjects = json.optInt("maxObjects", 5),
             enableVibration = json.optBoolean("enableVibration", true),
             enabledItems = itemMap
         )
@@ -117,8 +84,7 @@ class MainActivity : ComponentActivity() {
 
     private fun saveSettings(sp: android.content.SharedPreferences, s: GameSettings) {
         val json = JSONObject().apply {
-            put("showGrid", s.showGrid); put("isLoopMode", s.isLoopMode)
-            put("maxObjects", s.maxObjects); put("enableVibration", s.enableVibration)
+            put("showGrid", s.showGrid); put("isLoopMode", s.isLoopMode); put("enableVibration", s.enableVibration)
             put("enabledItems", JSONObject().apply { s.enabledItems.forEach { (k, v) -> put(k.name, v) } })
         }
         sp.edit().putString("settings", json.toString()).apply()

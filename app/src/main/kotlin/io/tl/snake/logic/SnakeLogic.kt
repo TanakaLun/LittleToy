@@ -10,7 +10,7 @@ object GameConfig {
     const val BASE_SPEED = 150L
     const val MIN_SPEED = 50L
     const val GHOST_DURATION_MS = 15000L
-    const val INVINCIBLE_DURATION_MS = 5000L // Shield break invincibility
+    const val INVINCIBLE_DURATION_MS = 5000L
     const val ITEM_DECAY_MS = 15000L
 }
 
@@ -66,10 +66,8 @@ enum class GameEvent { EAT_GOOD, EAT_BAD, HIT_WALL, SHIELD_BREAK }
 
 fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction): SnakeState {
     if (state.isGameOver || state.isPaused || !state.isStarted) return state
-    
     val currentSpeed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
     val head = state.snake.first()
-    
     var nX = when (nextDirection) { 
         Direction.LEFT -> head.first - 1; Direction.RIGHT -> head.first + 1; else -> head.first 
     }
@@ -80,7 +78,6 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
     val isInvincible = state.invincibleTimeRemaining > 0
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0 || isInvincible
     val activeLoopMode = settings.isLoopMode || isInvincible
-    var event: GameEvent? = null
 
     if (activeLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -111,16 +108,14 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
         .filter { it.pos != nH }
         .toMutableList()
     
+    var event: GameEvent? = null
     if (hitObject != null) {
         sc += hitObject.type.score
         ic[hitObject.type] = (ic[hitObject.type] ?: 0) + 1
         event = if (hitObject.type.score >= 0) GameEvent.EAT_GOOD else GameEvent.EAT_BAD
         when (hitObject.type) {
-            ItemType.SLOW -> sm += 20
-            ItemType.COFFEE -> sm += 40
-            ItemType.CHILI -> sm -= 30
-            ItemType.SHIELD -> sCount++
-            ItemType.CLOVER -> sCount += Random.nextInt(1, 4)
+            ItemType.SLOW -> sm += 20; ItemType.COFFEE -> sm += 40; ItemType.CHILI -> sm -= 30
+            ItemType.SHIELD -> sCount++; ItemType.CLOVER -> sCount += Random.nextInt(1, 4)
             ItemType.GHOST -> if (!settings.isGhostPermanent) gTime = GameConfig.GHOST_DURATION_MS
             else -> {}
         }
@@ -141,10 +136,5 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
         }
     }
 
-    return state.copy(
-        snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), 
-        itemsCollected = ic, speedModifier = sm, shieldCount = sCount, 
-        direction = nextDirection, ghostTimeRemaining = gTime, 
-        invincibleTimeRemaining = iTime, lastEvent = event
-    )
+    return state.copy(snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), itemsCollected = ic, speedModifier = sm, shieldCount = sCount, direction = nextDirection, ghostTimeRemaining = gTime, invincibleTimeRemaining = iTime, lastEvent = event)
 }
