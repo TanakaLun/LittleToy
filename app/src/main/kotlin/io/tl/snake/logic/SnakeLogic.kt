@@ -10,7 +10,7 @@ object GameConfig {
     const val BASE_SPEED = 150L
     const val MIN_SPEED = 50L
     const val GHOST_DURATION_MS = 15000L
-    const val INVINCIBLE_DURATION_MS = 15000L
+    const val INVINCIBLE_DURATION_MS = 5000L // Shield break invincibility
     const val ITEM_DECAY_MS = 15000L
 }
 
@@ -19,14 +19,14 @@ enum class Direction { UP, DOWN, LEFT, RIGHT }
 enum class ItemType(val color: Color, val score: Int, val weight: Float, val label: String, val icon: ImageVector) {
     FOOD_BASIC(Color(0xFF4CAF50), 10, 0.6f, "Basic", Icons.Default.Fastfood),
     FOOD_GOLD(Color(0xFFFFD700), 30, 0.12f, "Gold", Icons.Default.Star),
-    FOOD_POISON(Color(0xFF9C27B0), -20, 0.05f, "POISON", Icons.Default.Dangerous),
-    DIAMOND(Color(0xFF00E5FF), 150, 0.015f, "钻石", Icons.Default.Diamond),
-    COFFEE(Color(0xFF8D6E63), 20, 0.04f, "咖啡(减速)", Icons.Default.Coffee),
-    CHILI(Color(0xFFFF5252), 100, 0.03f, "辣椒(加速)", Icons.Default.Whatshot),
-    SHIELD(Color(0xFF2196F3), 50, 0.03f, "护盾", Icons.Default.Shield),
-    CLOVER(Color(0xFF8BC34A), 40, 0.02f, "幸运草", Icons.Default.LocalFlorist),
-    SLOW(Color(0xFFFF9800), 50, 0.035f, "沙漏", Icons.Default.AvTimer),
-    GHOST(Color(0xFFE91E63), 50, 0.03f, "幽灵", Icons.Default.Deblur)
+    FOOD_POISON(Color(0xFF9C27B0), -20, 0.05f, "Poison", Icons.Default.Dangerous),
+    DIAMOND(Color(0xFF00E5FF), 150, 0.015f, "Diamond", Icons.Default.Diamond),
+    COFFEE(Color(0xFF8D6E63), 20, 0.04f, "Coffee", Icons.Default.Coffee),
+    CHILI(Color(0xFFFF5252), 100, 0.03f, "Chili", Icons.Default.Whatshot),
+    SHIELD(Color(0xFF2196F3), 50, 0.03f, "Shield", Icons.Default.Shield),
+    CLOVER(Color(0xFF8BC34A), 40, 0.02f, "Clover", Icons.Default.LocalFlorist),
+    SLOW(Color(0xFFFF9800), 50, 0.035f, "Slow", Icons.Default.AvTimer),
+    GHOST(Color(0xFFE91E63), 50, 0.03f, "Ghost", Icons.Default.Deblur)
 }
 
 data class GameObject(val pos: Pair<Int, Int>, val type: ItemType, val timeLeft: Long = GameConfig.ITEM_DECAY_MS)
@@ -68,9 +68,8 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
     if (state.isGameOver || state.isPaused || !state.isStarted) return state
     
     val currentSpeed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
-    
-    // 1. 移动逻辑
     val head = state.snake.first()
+    
     var nX = when (nextDirection) { 
         Direction.LEFT -> head.first - 1; Direction.RIGHT -> head.first + 1; else -> head.first 
     }
@@ -78,10 +77,10 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
         Direction.UP -> head.second - 1; Direction.DOWN -> head.second + 1; else -> head.second 
     }
 
-    // 2. 状态判定 (无敌/幽灵/穿墙)
     val isInvincible = state.invincibleTimeRemaining > 0
     val isGhostActive = settings.isGhostPermanent || state.ghostTimeRemaining > 0 || isInvincible
     val activeLoopMode = settings.isLoopMode || isInvincible
+    var event: GameEvent? = null
 
     if (activeLoopMode) {
         nX = (nX + state.gridWidth) % state.gridWidth
@@ -104,9 +103,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
     var sCount = state.shieldCount
     var gTime = if (settings.isGhostPermanent) 0L else (state.ghostTimeRemaining - currentSpeed).coerceAtLeast(0L)
     val iTime = (state.invincibleTimeRemaining - currentSpeed).coerceAtLeast(0L)
-    var event: GameEvent? = null
 
-    // 3. 碰撞物品逻辑
     val hitObject = state.objects.find { it.pos == nH }
     val remainingObjects = state.objects.asSequence()
         .map { it.copy(timeLeft = it.timeLeft - currentSpeed) }
@@ -121,7 +118,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
         when (hitObject.type) {
             ItemType.SLOW -> sm += 20
             ItemType.COFFEE -> sm += 40
-            ItemType.CHILI -> sm -= 35
+            ItemType.CHILI -> sm -= 30
             ItemType.SHIELD -> sCount++
             ItemType.CLOVER -> sCount += Random.nextInt(1, 4)
             ItemType.GHOST -> if (!settings.isGhostPermanent) gTime = GameConfig.GHOST_DURATION_MS
@@ -132,7 +129,6 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
         nS.removeAt(nS.size - 1)
     }
 
-    // 4. 物品生成
     val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
     if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.12f && allowedTypes.isNotEmpty()) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
@@ -148,7 +144,7 @@ fun gameTick(state: SnakeState, settings: GameSettings, nextDirection: Direction
     return state.copy(
         snake = nS, objects = remainingObjects, score = sc.coerceAtLeast(0), 
         itemsCollected = ic, speedModifier = sm, shieldCount = sCount, 
-        direction = nextDirection,
-        ghostTimeRemaining = gTime, invincibleTimeRemaining = iTime, lastEvent = event
+        direction = nextDirection, ghostTimeRemaining = gTime, 
+        invincibleTimeRemaining = iTime, lastEvent = event
     )
 }
