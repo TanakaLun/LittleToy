@@ -11,7 +11,7 @@ object GameConfig {
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
-enum class ControlMode { SWIPE, BUTTONS }
+enum class ControlMode { SWIPE, BUTTONS, TV_REMOTE } // 增加电视遥控模式
 
 enum class ItemType(val colorHex: Long, val score: Int, val weight: Float, val label: String) {
     FOOD_BASIC(0xFF4CAF50, 10, 0.6f, "Basic"),
@@ -38,6 +38,7 @@ data class GameSettings(
     val enableItemDecay: Boolean = true,
     val targetCellSize: Float = 22f,
     val controlMode: ControlMode = ControlMode.SWIPE,
+    val isTVMode: Boolean = false, // 增加 TV 模式标志
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
