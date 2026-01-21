@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "io.tl.snake"
-        minSdk = 21
+        minSdk = 31
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -21,6 +21,18 @@ android {
 
     buildFeatures {
         compose = true
+    }
+    
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/LICENSE*"
+            excludes += "/META-INF/NOTICE*"
+            excludes += "/META-INF/*.kotlin_module"
+            excludes += "/kotlin/**"
+            excludes += "DebugProbesKt.bin"
+        }
     }
     
     buildTypes {
