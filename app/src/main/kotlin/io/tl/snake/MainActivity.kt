@@ -64,7 +64,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // 最外层 Box 确保倒计时遮罩可以覆盖 TopBar
                 Box(Modifier.fillMaxSize()) {
                     Scaffold(
                         topBar = { GameTopBar(state, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
@@ -83,7 +82,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // 全屏遮罩：位于 Box 顶层，无视 Scaffold 边界，覆盖 TopBar
                     if (vm.countdown > 0) {
                         CountdownOverlay(vm.countdown)
                     }
@@ -95,7 +93,6 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CountdownOverlay(count: Int) {
-    // 使用全屏铺满 + 较高 z-index 效果
     Box(Modifier.fillMaxSize().background(Color.Black.copy(0.5f)).pointerInput(Unit) {}, contentAlignment = Alignment.Center) {
         AnimatedContent(
             targetState = count,
@@ -104,11 +101,7 @@ fun CountdownOverlay(count: Int) {
             }, label = "countdown_anim"
         ) { targetCount ->
             Text(
-                text = "$targetCount",
-                fontSize = 140.sp,
-                fontWeight = FontWeight.Black,
-                color = Color.White,
-                textAlign = TextAlign.Center
+                text = "$targetCount", fontSize = 140.sp, fontWeight = FontWeight.Black, color = Color.White, textAlign = TextAlign.Center
             )
         }
     }
@@ -131,14 +124,12 @@ fun ControlButtonsRow(onDirChange: (Direction) -> Unit) {
         val size = 56.dp
         val containerColor = MaterialTheme.colorScheme.primaryContainer.copy(0.7f)
         
-        // 提取统一的按钮样式
         @Composable
         fun DirIconButton(icon: ImageVector, dir: Direction) {
             IconButton(onClick = { onDirChange(dir) }, modifier = Modifier.size(size).background(containerColor, CircleShape)) {
                 Icon(icon, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
             }
         }
-
         DirIconButton(Icons.Default.ArrowBack, Direction.LEFT)
         DirIconButton(Icons.Default.ArrowUpward, Direction.UP)
         DirIconButton(Icons.Default.ArrowDownward, Direction.DOWN)
@@ -175,14 +166,28 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
                         Modifier.pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); vm.handleSwipe(drag.x, drag.y) } }
                     } else Modifier
                 )) {
+                    // 绘制网格
                     if (settings.showGrid) {
                         for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, size.height))
                         for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(size.width, i * cellSizePx))
                     }
+                    
+                    // 绘制道具进度条 (新加回：位于画布顶边)
+                    if (state.invincibleTimeRemaining > 0) {
+                        val progress = state.invincibleTimeRemaining.toFloat() / GameConfig.INVINCIBLE_DURATION_MS
+                        drawRect(Color(0xFF00E5FF), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
+                    } else if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
+                        val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
+                        drawRect(Color(ItemType.GHOST.colorHex), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
+                    }
+
+                    // 绘制物品
                     state.objects.forEach { obj ->
                         val alpha = if (settings.enableItemDecay && obj.timeLeft < 5000L) decayAlpha else 1f
                         drawCircle(Color(obj.type.colorHex).copy(alpha), (cellSizePx * 0.35f) * (if (alpha < 1f) decayScale else 1f), Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
                     }
+                    
+                    // 绘制蛇
                     state.snake.forEachIndexed { i, p ->
                         val color = when {
                             i == 0 && state.invincibleTimeRemaining > 0 -> Color(0xFF00E5FF)
