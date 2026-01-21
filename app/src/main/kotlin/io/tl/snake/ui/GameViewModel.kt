@@ -43,6 +43,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 targetCellSize = json.optDouble("targetCellSize", 22.0).toFloat(),
                 isGhostPermanent = json.optBoolean("isGhostPermanent", false),
                 controlMode = ControlMode.valueOf(json.optString("controlMode", "SWIPE")),
+                isTVMode = json.optBoolean("isTVMode", false),
                 enabledItems = itemMap
             )
             state = state.copy(highScore = hs)
@@ -56,6 +57,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             put("maxObjects", settings.maxObjects); put("enableItemDecay", settings.enableItemDecay)
             put("targetCellSize", settings.targetCellSize.toDouble()); put("isGhostPermanent", settings.isGhostPermanent)
             put("controlMode", settings.controlMode.name)
+            put("isTVMode", settings.isTVMode)
             put("enabledItems", JSONObject().apply { settings.enabledItems.forEach { (k, v) -> put(k.name, v) } })
         }
         sp.edit().putString("settings", json.toString()).putInt("hs", state.highScore).apply()
@@ -75,7 +77,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startResumeCountdown() {
-        // 只有游戏已经开始，才执行倒计时恢复逻辑
         if (state.isStarted && !state.isGameOver) {
             viewModelScope.launch {
                 countdown = 3
@@ -86,7 +87,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 state = state.copy(isPaused = false)
             }
         } else {
-            // 否则单纯关闭暂停状态
             state = state.copy(isPaused = false)
         }
     }
@@ -112,11 +112,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun togglePause() { 
-        if (!state.isPaused) {
-            state = state.copy(isPaused = true)
-        } else {
-            startResumeCountdown()
-        }
+        if (!state.isPaused) state = state.copy(isPaused = true)
+        else startResumeCountdown()
     }
 
     fun setPaused(paused: Boolean) { state = state.copy(isPaused = paused) }

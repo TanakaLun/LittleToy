@@ -2,6 +2,7 @@ package io.tl.snake
 
 import android.content.Context
 import android.os.*
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,9 +20,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +57,7 @@ class MainActivity : ComponentActivity() {
                 val settings = vm.settings
                 var showSettings by remember { mutableStateOf(false) }
                 val vibrator = LocalContext.current.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                val focusRequester = remember { FocusRequester() }
 
                 LaunchedEffect(state.lastEvent) {
                     if (settings.enableVibration && state.lastEvent != null) {
@@ -64,18 +69,26 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // TV 模式下，每次进入或恢复时请求焦点
+                LaunchedEffect(settings.isTVMode, state.isPaused, state.isStarted, showSettings) {
+                    if (settings.isTVMode && !state.isPaused && state.isStarted && !showSettings) {
+                        focusRequester.requestFocus()
+                    }
+                }
+
                 Box(Modifier.fillMaxSize()) {
                     Scaffold(
-                        topBar = { GameTopBar(state, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
+                        topBar = { GameTopBar(state, settings, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
                     ) { p ->
                         Box(Modifier.padding(p).fillMaxSize()) {
-                            GameContent(state, settings, vm)
+                            // 游戏核心区域：TV 模式下通过 onKeyEvent 拦截遥控器信号
+                            GameContent(state, settings, vm, focusRequester)
                             
                             if (showSettings) {
                                 SettingsDialog(settings, onDismiss = { showSettings = false; vm.startResumeCountdown() }, onUpdate = { vm.updateSettings(it) })
                             }
                             if (state.isGameOver) {
-                                ResultDialog(state, onRestart = { vm.restartGame() }, onOpenSettings = { showSettings = true })
+                                ResultDialog(state, settings, onRestart = { vm.restartGame() }, onOpenSettings = { showSettings = true })
                             } else if (state.isPaused && vm.countdown == 0 && !showSettings) {
                                 PauseStatsDialog(state) { vm.togglePause() }
                             }
@@ -108,10 +121,34 @@ fun CountdownOverlay(count: Int) {
 }
 
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel) {
+fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, focusRequester: FocusRequester) {
     Column(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f).fillMaxWidth().padding(16.dp)) { GameCanvasArea(state, settings, vm) }
-        if (settings.controlMode == ControlMode.BUTTONS) {
+        Box(
+            Modifier.weight(1f).fillMaxWidth().padding(16.dp)
+                // TV 模式按键监听
+                .then(if (settings.isTVMode) {
+                    Modifier
+                        .focusRequester(focusRequester)
+                        .focusable()
+                        .onKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown) {
+                                when (event.nativeKeyEvent.keyCode) {
+                                    KeyEvent.KEYCODE_DPAD_UP -> { vm.setDirection(Direction.UP); true }
+                                    KeyEvent.KEYCODE_DPAD_DOWN -> { vm.setDirection(Direction.DOWN); true }
+                                    KeyEvent.KEYCODE_DPAD_LEFT -> { vm.setDirection(Direction.LEFT); true }
+                                    KeyEvent.KEYCODE_DPAD_RIGHT -> { vm.setDirection(Direction.RIGHT); true }
+                                    KeyEvent.KEYCODE_BACK -> { vm.togglePause(); true }
+                                    else -> false
+                                }
+                            } else false
+                        }
+                } else Modifier)
+        ) { 
+            GameCanvasArea(state, settings, vm) 
+        }
+        
+        // 只有非 TV 模式且选择了按钮控制才显示按钮
+        if (!settings.isTVMode && settings.controlMode == ControlMode.BUTTONS) {
             ControlButtonsRow(onDirChange = { vm.setDirection(it) })
             Spacer(Modifier.height(48.dp))
         }
@@ -162,17 +199,14 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
             }
             Box(Modifier.size((cellSizePx * gridW / density).dp, (cellSizePx * gridH / density).dp).clip(RoundedCornerShape(12.dp)).background(colorScheme.surfaceVariant.copy(0.3f)).border(1.dp, colorScheme.outlineVariant.copy(0.3f), RoundedCornerShape(12.dp))) {
                 Canvas(Modifier.fillMaxSize().then(
-                    if (settings.controlMode == ControlMode.SWIPE) {
+                    if (!settings.isTVMode && settings.controlMode == ControlMode.SWIPE) {
                         Modifier.pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); vm.handleSwipe(drag.x, drag.y) } }
                     } else Modifier
                 )) {
-                    // 绘制网格
                     if (settings.showGrid) {
                         for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, size.height))
                         for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(size.width, i * cellSizePx))
                     }
-                    
-                    // 绘制道具进度条 (新加回：位于画布顶边)
                     if (state.invincibleTimeRemaining > 0) {
                         val progress = state.invincibleTimeRemaining.toFloat() / GameConfig.INVINCIBLE_DURATION_MS
                         drawRect(Color(0xFF00E5FF), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
@@ -180,14 +214,10 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
                         val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
                         drawRect(Color(ItemType.GHOST.colorHex), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
                     }
-
-                    // 绘制物品
                     state.objects.forEach { obj ->
                         val alpha = if (settings.enableItemDecay && obj.timeLeft < 5000L) decayAlpha else 1f
                         drawCircle(Color(obj.type.colorHex).copy(alpha), (cellSizePx * 0.35f) * (if (alpha < 1f) decayScale else 1f), Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
                     }
-                    
-                    // 绘制蛇
                     state.snake.forEachIndexed { i, p ->
                         val color = when {
                             i == 0 && state.invincibleTimeRemaining > 0 -> Color(0xFF00E5FF)
@@ -198,7 +228,11 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
                         drawRoundRect(color.copy((1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)), Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f), Size(cellSizePx - 3f, cellSizePx - 3f), CornerRadius(4.dp.toPx()))
                     }
                 }
-                if (!state.isStarted) Button(onClick = { vm.startGame() }, Modifier.align(Alignment.Center)) { Text("START") }
+                if (!state.isStarted) {
+                    Button(onClick = { vm.startGame() }, Modifier.align(Alignment.Center).then(if (settings.isTVMode) Modifier.focusable() else Modifier)) { 
+                        Text("START") 
+                    }
+                }
             }
         }
         if (state.isGameOver && state.score >= state.highScore && state.score > 0) ConfettiEffect()
@@ -211,28 +245,41 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
         title = { Text("Configuration", fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Row(Modifier.fillMaxWidth().height(56.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Text("Control Mode", fontSize = 14.sp)
-                    Surface(
-                        onClick = { onUpdate(settings.copy(controlMode = if (settings.controlMode == ControlMode.SWIPE) ControlMode.BUTTONS else ControlMode.SWIPE)) },
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(24.dp)
-                    ) {
-                        Text(
-                            text = if (settings.controlMode == ControlMode.SWIPE) "Swipe Focus" else "Button Control",
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                // TV 模式切换
+                SettingRow("TV Mode Adapter") { 
+                    Switch(checked = settings.isTVMode, onCheckedChange = { onUpdate(settings.copy(isTVMode = it)) }) 
+                }
+                
+                // 只有非 TV 模式显示控制方式切换
+                if (!settings.isTVMode) {
+                    Row(Modifier.fillMaxWidth().height(56.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Text("Control Mode", fontSize = 14.sp)
+                        Surface(
+                            onClick = { onUpdate(settings.copy(controlMode = if (settings.controlMode == ControlMode.SWIPE) ControlMode.BUTTONS else ControlMode.SWIPE)) },
+                            color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(24.dp)
+                        ) {
+                            Text(
+                                text = if (settings.controlMode == ControlMode.SWIPE) "Swipe Focus" else "Button Control",
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
                     }
                 }
+                
                 SettingRow("Loop Mode") { Switch(checked = settings.isLoopMode, onCheckedChange = { onUpdate(settings.copy(isLoopMode = it)) }) }
                 SettingRow("Vibration") { Switch(checked = settings.enableVibration, onCheckedChange = { onUpdate(settings.copy(enableVibration = it)) }) }
                 SettingRow("Item Decay") { Switch(checked = settings.enableItemDecay, onCheckedChange = { onUpdate(settings.copy(enableItemDecay = it)) }) }
-                Spacer(Modifier.height(8.dp))
-                Text("Max Items: ${settings.maxObjects}", style = MaterialTheme.typography.labelMedium)
-                Slider(value = settings.maxObjects.toFloat(), onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }, valueRange = 1f..15f, steps = 13)
-                Text("Cell Size: ${settings.targetCellSize.toInt()}dp", style = MaterialTheme.typography.labelMedium)
-                Slider(value = settings.targetCellSize, onValueChange = { onUpdate(settings.copy(targetCellSize = it)) }, valueRange = 16f..40f)
+                
+                // TV 模式下移除 Slider，代之以简单的步进器或固定配置以减少遥控操作难度
+                if (!settings.isTVMode) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Max Items: ${settings.maxObjects}", style = MaterialTheme.typography.labelMedium)
+                    Slider(value = settings.maxObjects.toFloat(), onValueChange = { onUpdate(settings.copy(maxObjects = it.toInt())) }, valueRange = 1f..15f, steps = 13)
+                    Text("Cell Size: ${settings.targetCellSize.toInt()}dp", style = MaterialTheme.typography.labelMedium)
+                    Slider(value = settings.targetCellSize, onValueChange = { onUpdate(settings.copy(targetCellSize = it)) }, valueRange = 16f..40f)
+                }
+                
                 HorizontalDivider(Modifier.padding(vertical = 12.dp))
                 ItemType.entries.forEach { type ->
                     Row(Modifier.fillMaxWidth().height(40.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -258,7 +305,7 @@ fun SettingRow(label: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-fun ResultDialog(state: SnakeState, onRestart: () -> Unit, onOpenSettings: () -> Unit) {
+fun ResultDialog(state: SnakeState, settings: GameSettings, onRestart: () -> Unit, onOpenSettings: () -> Unit) {
     AlertDialog(onDismissRequest = {}, 
         confirmButton = {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
@@ -332,18 +379,22 @@ fun ConfettiEffect() {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun GameTopBar(state: SnakeState, onTogglePause: () -> Unit, onOpenSettings: () -> Unit, onResetHS: () -> Unit) {
+fun GameTopBar(state: SnakeState, settings: GameSettings, onTogglePause: () -> Unit, onOpenSettings: () -> Unit, onResetHS: () -> Unit) {
     Box(Modifier.fillMaxWidth().statusBarsPadding().height(70.dp)) {
         Column(Modifier.align(Alignment.CenterStart).padding(start = 16.dp)) {
             ScoreChip(Icons.Default.EmojiEvents, "HI", state.highScore, MaterialTheme.colorScheme.outline, onLongClick = onResetHS)
             ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary)
         }
         Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center))
-        Row(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
-            if (state.isStarted && !state.isGameOver) {
-                IconButton(onClick = onTogglePause) { Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null) }
+        
+        // TV 模式下隐藏顶栏按钮，仅保留信息展示
+        if (!settings.isTVMode) {
+            Row(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
+                if (state.isStarted && !state.isGameOver) {
+                    IconButton(onClick = onTogglePause) { Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, null) }
+                }
+                IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, null) }
             }
-            IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, null) }
         }
     }
 }
