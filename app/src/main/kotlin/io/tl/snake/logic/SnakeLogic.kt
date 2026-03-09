@@ -11,7 +11,7 @@ object GameConfig {
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
-enum class ControlMode { SWIPE, BUTTONS, TV_REMOTE } // 增加电视遥控模式
+enum class ControlMode { SWIPE, BUTTONS, TV_REMOTE }
 
 enum class ItemType(val colorHex: Long, val score: Int, val weight: Float, val label: String) {
     FOOD_BASIC(0xFF4CAF50, 10, 0.6f, "Basic"),
