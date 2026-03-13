@@ -1,0 +1,206 @@
+name: Create Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: 'Version code (number, e.g., 42)'
+        required: true
+        type: number
+      version_name:
+        description: 'Version name (e.g., 1.2.3)'
+        required: true
+        type: string
+      release_title:
+        description: 'Release title (empty for auto-generate)'
+        required: false
+        type: string
+        default: ''
+      prerelease:
+        description: 'Is prerelease'
+        required: true
+        type: boolean
+        default: false
+      custom_release_notes:
+        description: 'Custom release notes (empty for auto-generate)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make script executable
+        run: chmod +x .github/scripts/create-release.sh
+
+      - name: Set version tag
+        id: version
+        run: |
+          TAG_NAME="${{ github.event.inputs.version_name }}-build${{ github.event.inputs.version_code }}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Generate release title
+        id: title
+        run: |
+          if [[ -n "${{ github.event.inputs.release_title }}" ]]; then
+            TITLE="${{ github.event.inputs.release_title }}"
+          else
+            TODAY=$(date +'%Y-%m-%d')
+            TITLE="Release ${{ github.event.inputs.version_name }} ($TODAY)"
+          fi
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          NOTES_FILE="release_notes.md"
+          
+          if [[ -n "${{ github.event.inputs.custom_release_notes }}" ]]; then
+            echo "${{ github.event.inputs.custom_release_notes }}" > "$NOTES_FILE"
+          else
+            ./.github/scripts/create-release.sh generate-notes \
+              "${{ github.event.inputs.version_name }}" \
+              "${{ github.event.inputs.version_code }}" > "$NOTES_FILE"
+          fi
+          
+          echo "path=$NOTES_FILE" >> $GITHUB_OUTPUT
+          
+          echo "### Release Notes Preview" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat "$NOTES_FILE" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Modify gradle file
+        run: |
+          ./.github/scripts/create-release.sh modify-gradle \
+            "app/build.gradle.kts" \
+            "${{ github.event.inputs.version_code }}" \
+            "${{ github.event.inputs.version_name }}"
+
+      - name: Create tag
+        run: |
+          TAG_NAME="${{ steps.version.outputs.tag }}"
+          
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            git tag -d "$TAG_NAME"
+            git push --delete origin "$TAG_NAME" 2>/dev/null || true
+          fi
+          
+          git tag -a "$TAG_NAME" -m "Release ${{ github.event.inputs.version_name }} (Build ${{ github.event.inputs.version_code }})"
+          git push origin "$TAG_NAME"
+
+      - name: Create empty release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${{ steps.version.outputs.tag }}"
+          
+          PRERELEASE_FLAG=""
+          if [[ "${{ github.event.inputs.prerelease }}" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          
+          gh release create "$TAG_NAME" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.title.outputs.title }}" \
+            --notes-file "${{ steps.notes.outputs.path }}" \
+            $PRERELEASE_FLAG
+
+      - name: Grant permission to gradlew
+        run: chmod +x gradlew
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g"
+
+      - name: Prepare assets
+        id: assets
+        run: |
+          ./.github/scripts/create-release.sh prepare-assets \
+            "${{ github.event.inputs.version_name }}" \
+            "${{ github.event.inputs.version_code }}" \
+            "${{ github.workspace }}"
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${{ steps.version.outputs.tag }}"
+          
+          if [[ -d "release-assets" ]] && [[ -n "$(ls -A release-assets)" ]]; then
+            for asset in release-assets/*; do
+              if [[ -f "$asset" ]]; then
+                echo "Uploading: $(basename "$asset")"
+                gh release upload "$TAG_NAME" "$asset" --clobber
+              fi
+            done
+          else
+            echo "No assets found to upload"
+          fi
+
+      - name: Generate build summary
+        if: always()
+        run: |
+          TAG_NAME="${{ steps.version.outputs.tag }}"
+          
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          ## ✅ Release Complete
+
+          | Item | Value |
+          |------|-------|
+          | **Tag** | \`${TAG_NAME}\` |
+          | **Version** | ${{ github.event.inputs.version_name }} (Code: ${{ github.event.inputs.version_code }}) |
+          | **Type** | ${{ github.event.inputs.prerelease && 'Pre-release' || 'Stable' }} |
+          | **Created by** | ${{ github.actor }} |
+
+          ### 📦 Assets
+
+          EOF
+          
+          if [[ -d "release-assets" ]] && [[ -n "$(ls -A release-assets)" ]]; then
+            for asset in release-assets/*; do
+              if [[ -f "$asset" ]]; then
+                filename=$(basename "$asset")
+                size=$(ls -lh "$asset" | awk '{print $5}')
+                sha256=$(sha256sum "$asset" | cut -d' ' -f1 | cut -c1-16)
+                echo "* **\`${filename}\`** (${size}) - \`${sha256}...\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          fi
+          
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+
+          ### 🔗 Links
+
+          * [View Release](https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME})
+          * [View Build Log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          ---
+          *Built by GitHub Actions*
+          EOF
