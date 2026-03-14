@@ -97,6 +97,14 @@ jobs:
             "app/build.gradle.kts" \
             "${{ github.event.inputs.version_code }}" \
             "${{ github.event.inputs.version_name }}"
+      
+      - name: Export keystore.properties
+        run: |
+          echo "${{ secrets.PASSWORD }}" | base64 -d > keystore.properties
+          chmod -x keystore.properties
+          
+          echo "${{ secrets.KEY }}" | base64 -d > app/TanakaLun.keystore
+          chmod -x app/TanakaLun.keystore
 
       - name: Create tag
         run: |
