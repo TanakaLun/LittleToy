@@ -1,4 +1,4 @@
-name: Snake APK CI Build
+name: CI Build
 
 on:
   push:
@@ -79,7 +79,6 @@ jobs:
         run: |
           # 查找并修改 build.gradle.kts
           GRADLE_FILE="app/build.gradle.kts"
-          KOTLIN_FILE="app/src/main/kotlin/io/tl/snake/logic/SnakeLogic.kt"
           
           echo "Found gradle file: $GRADLE_FILE"
                     
@@ -111,7 +110,7 @@ jobs:
           echo "build_timestamp=$BUILD_TIMESTAMP" >> $GITHUB_OUTPUT
 
           ORIGINAL_APK_PATH=$(find ${{ github.workspace }}/app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
-          NEW_APK_NAME="Snake-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
+          NEW_APK_NAME="SnakeEVO-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
           
           # 重命名 APK 文件
           NEW_APK_DIR=$(dirname "$ORIGINAL_APK_PATH")
@@ -123,7 +122,7 @@ jobs:
       - name: 📤 Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Snake-debug-v${{ steps.version_info.outputs.version_code }}
+          name: SnakeEVO-debug-v${{ steps.version_info.outputs.version_code }}
           path: ${{ steps.build_info.outputs.apk_path }}
           retention-days: 7
 
@@ -183,7 +182,6 @@ jobs:
         run: |
           # 查找并修改 build.gradle.kts
           GRADLE_FILE="app/build.gradle.kts"
-          KOTLIN_FILE="app/src/main/kotlin/io/tl/snake/logic/SnakeLogic.kt"
           
           echo "Found gradle file: $GRADLE_FILE"
                     
@@ -223,7 +221,7 @@ jobs:
           echo "build_timestamp=$BUILD_TIMESTAMP" >> $GITHUB_OUTPUT
 
           ORIGINAL_APK_PATH=$(find ${{ github.workspace }}/app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
-          NEW_APK_NAME="Snake-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
+          NEW_APK_NAME="SnakeEVO-${{ env.NATIVE_TARGET }}-${{ env.BUILD_TYPE }}-v${VERSION_CODE}-${COMMIT_SHORT}.apk"
           
           # 重命名 APK 文件
           NEW_APK_DIR=$(dirname "$ORIGINAL_APK_PATH")
@@ -235,6 +233,6 @@ jobs:
       - name: 📤 Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Snake-release-v${{ steps.version_info.outputs.version_code }}
+          name: SnakeEVO-release-v${{ steps.version_info.outputs.version_code }}
           path: ${{ steps.build_info.outputs.apk_path }}
           retention-days: 7
