@@ -65,6 +65,7 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private var autoRefreshJob: kotlinx.coroutines.Job? = null
+    private var observeJob: kotlinx.coroutines.Job? = null
 
     private fun startAutoRefresh() {
         autoRefreshJob?.cancel()
@@ -78,6 +79,7 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun hostGame() {
         autoRefreshJob?.cancel()
+        observeJob?.cancel()
         uiState = uiState.copy(isHost = true, screen = MultiplayerScreen.LOBBY)
         server = LanServer(uiState.playerName, viewModelScope)
         server!!.start()
@@ -89,6 +91,7 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun joinGame(serverAddress: java.net.InetAddress) {
         autoRefreshJob?.cancel()
+        observeJob?.cancel()
         uiState = uiState.copy(isHost = false, hostAddress = serverAddress.hostAddress ?: "", screen = MultiplayerScreen.LOBBY)
         client = LanClient(viewModelScope)
         client!!.connect(serverAddress, uiState.playerName)
@@ -96,45 +99,57 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun observeClient() {
-        viewModelScope.launch {
-            client?.status?.collectLatest { status ->
-                uiState = uiState.copy(
-                    playerId = status.playerId,
-                    lobbyPlayers = status.lobbyPlayers,
-                    gameStarted = status.gameStarted
-                )
-                if (status.gameStarted) {
-                    uiState = uiState.copy(screen = MultiplayerScreen.GAME, showDialog = false)
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            client?.gameState?.collectLatest { gs ->
-                if (gs != null) uiState = uiState.copy(gameState = gs)
-            }
-        }
-
-        viewModelScope.launch {
-            client?.gameOver?.collectLatest { result ->
-                if (result != null) {
-                    val (winnerId, winnerName) = result
+        observeJob?.cancel()
+        observeJob = viewModelScope.launch {
+            val clientStatusJob = launch {
+                client?.status?.collectLatest { status ->
+                    val newLobbyPlayers = if (uiState.isHost && server != null) {
+                        server!!.status.value.players
+                    } else {
+                        status.lobbyPlayers
+                    }
                     uiState = uiState.copy(
-                        screen = MultiplayerScreen.VICTORY,
-                        showDialog = false,
-                        winnerId = winnerId,
-                        winnerName = winnerName
+                        playerId = status.playerId,
+                        lobbyPlayers = newLobbyPlayers,
+                        gameStarted = status.gameStarted
                     )
+                    if (status.gameStarted) {
+                        uiState = uiState.copy(screen = MultiplayerScreen.GAME, showDialog = false)
+                    }
                 }
             }
-        }
 
-        viewModelScope.launch {
-            server?.status?.collectLatest { serverStatus ->
-                uiState = uiState.copy(
-                    lobbyPlayers = serverStatus.players
-                )
+            val gameStateJob = launch {
+                client?.gameState?.collectLatest { gs ->
+                    if (gs != null) uiState = uiState.copy(gameState = gs)
+                }
             }
+
+            val gameOverJob = launch {
+                client?.gameOver?.collectLatest { result ->
+                    if (result != null) {
+                        val (winnerId, winnerName) = result
+                        uiState = uiState.copy(
+                            screen = MultiplayerScreen.VICTORY,
+                            showDialog = false,
+                            winnerId = winnerId,
+                            winnerName = winnerName
+                        )
+                    }
+                }
+            }
+
+            val serverStatusJob = launch {
+                server?.status?.collectLatest { serverStatus ->
+                    if (uiState.isHost) {
+                        uiState = uiState.copy(
+                            lobbyPlayers = serverStatus.players
+                        )
+                    }
+                }
+            }
+
+            listOf(clientStatusJob, gameStateJob, gameOverJob, serverStatusJob).forEach { it.join() }
         }
     }
 
@@ -159,12 +174,14 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun closeDialog() {
         autoRefreshJob?.cancel()
+        observeJob?.cancel()
         cleanup()
         uiState = MultiplayerUiState(playerName = identity.playerName)
     }
 
     fun backToBrowser() {
         autoRefreshJob?.cancel()
+        observeJob?.cancel()
         cleanup()
         uiState = uiState.copy(
             screen = MultiplayerScreen.ROOM_BROWSER,
