@@ -1,6 +1,7 @@
 package io.tl.snake
 
 import android.content.Context
+import android.graphics.Paint
 import android.os.*
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -23,7 +24,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.*
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
@@ -34,6 +36,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.tl.snake.logic.*
+import io.tl.snake.multiplayer.MultiplayerScreen
+import io.tl.snake.multiplayer.MultiplayerViewModel
+import io.tl.snake.network.DiscoveredServer
+import io.tl.snake.network.PlayerInfo
+import io.tl.snake.network.SerializedGameState
+import io.tl.snake.network.SerializedPlayerState
 import io.tl.snake.ui.GameViewModel
 import io.tl.snake.ui.theme.MyTheme
 import kotlin.random.Random
@@ -53,6 +61,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyTheme {
                 val vm: GameViewModel = viewModel()
+                val mpVm: MultiplayerViewModel = viewModel()
                 val state = vm.state
                 val settings = vm.settings
                 var showSettings by remember { mutableStateOf(false) }
@@ -69,7 +78,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // TV 模式下，每次进入或恢复时请求焦点
                 LaunchedEffect(settings.isTVMode, state.isPaused, state.isStarted, showSettings) {
                     if (settings.isTVMode && !state.isPaused && state.isStarted && !showSettings) {
                         focusRequester.requestFocus()
@@ -77,28 +85,247 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Box(Modifier.fillMaxSize()) {
-                    Scaffold(
-                        topBar = { GameTopBar(state, settings, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
-                    ) { p ->
-                        Box(Modifier.padding(p).fillMaxSize()) {
-                            // 游戏核心区域：TV 模式下通过 onKeyEvent 拦截遥控器信号
-                            GameContent(state, settings, vm, focusRequester)
-                            
-                            if (showSettings) {
-                                SettingsDialog(settings, onDismiss = { showSettings = false; vm.startResumeCountdown() }, onUpdate = { vm.updateSettings(it) })
+                    val mpScreen = mpVm.uiState.screen
+                    val showMpFullScreen = !mpVm.uiState.showDialog &&
+                        (mpScreen == MultiplayerScreen.GAME || mpScreen == MultiplayerScreen.VICTORY)
+
+                    if (showMpFullScreen) {
+                        when (mpScreen) {
+                            MultiplayerScreen.GAME -> MultiplayerGameView(mpVm)
+                            MultiplayerScreen.VICTORY -> MultiplayerVictoryScreen(
+                                winnerId = mpVm.uiState.winnerId,
+                                winnerName = mpVm.uiState.winnerName,
+                                myId = mpVm.uiState.playerId,
+                                onBackToLobby = { mpVm.backToLobby() },
+                                onBackToMenu = { mpVm.closeDialog() }
+                            )
+                            else -> {}
+                        }
+                    } else {
+                        Scaffold(
+                            topBar = { GameTopBar(state, settings, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
+                        ) { p ->
+                            Box(Modifier.padding(p).fillMaxSize()) {
+                                GameContent(state, settings, vm, focusRequester, onSwitchToMultiplayer = { mpVm.openMultiplayerDialog() })
+
+                                if (showSettings) {
+                                    SettingsDialog(settings, onDismiss = { showSettings = false; vm.startResumeCountdown() }, onUpdate = { vm.updateSettings(it) })
+                                }
+                                if (state.isGameOver) {
+                                    ResultDialog(state, settings, onRestart = { vm.restartGame() }, onOpenSettings = { showSettings = true })
+                                } else if (state.isPaused && vm.countdown == 0 && !showSettings) {
+                                    PauseStatsDialog(state) { vm.togglePause() }
+                                }
                             }
-                            if (state.isGameOver) {
-                                ResultDialog(state, settings, onRestart = { vm.restartGame() }, onOpenSettings = { showSettings = true })
-                            } else if (state.isPaused && vm.countdown == 0 && !showSettings) {
-                                PauseStatsDialog(state) { vm.togglePause() }
-                            }
+                        }
+                        if (vm.countdown > 0) {
+                            CountdownOverlay(vm.countdown)
                         }
                     }
 
-                    if (vm.countdown > 0) {
-                        CountdownOverlay(vm.countdown)
+                    if (mpVm.uiState.showDialog) {
+                        MultiplayerDialog(mpVm)
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun MultiplayerDialog(mpVm: MultiplayerViewModel) {
+    when (mpVm.uiState.screen) {
+        MultiplayerScreen.ROOM_BROWSER -> RoomBrowserDialog(mpVm)
+        MultiplayerScreen.LOBBY -> MultiplayerLobbyDialog(mpVm)
+        else -> {}
+    }
+}
+
+@Composable
+fun RoomBrowserDialog(mpVm: MultiplayerViewModel) {
+    AlertDialog(
+        onDismissRequest = { mpVm.closeDialog() },
+        title = { Text("LAN Multiplayer", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                Text("Playing as: ${mpVm.uiState.playerName}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(0.6f))
+                Spacer(Modifier.height(12.dp))
+
+                Button(
+                    onClick = { mpVm.hostGame() },
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Icon(Icons.Default.Wifi, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Create Room", fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Open Rooms", fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    if (mpVm.uiState.isDiscovering) {
+                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                val servers = mpVm.uiState.discoveredServers
+                if (servers.isEmpty() && !mpVm.uiState.isDiscovering) {
+                    Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                        Text("No rooms found", color = MaterialTheme.colorScheme.onSurface.copy(0.4f), fontSize = 13.sp)
+                    }
+                } else {
+                    Column(Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
+                        servers.forEach { server ->
+                            Surface(
+                                onClick = { mpVm.joinGame(server.address) },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f)
+                            ) {
+                                Row(Modifier.padding(12.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Computer, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(server.name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(server.address.hostAddress ?: "?", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(0.5f))
+                                    }
+                                    Surface(color = MaterialTheme.colorScheme.primary.copy(0.15f), shape = RoundedCornerShape(8.dp)) {
+                                        Text("${server.playerCount}", Modifier.padding(horizontal = 8.dp, vertical = 2.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { mpVm.closeDialog() }) { Text("CLOSE") } }
+    )
+}
+
+@Composable
+fun MultiplayerLobbyDialog(mpVm: MultiplayerViewModel) {
+    val isHost = mpVm.uiState.isHost
+    val players = mpVm.uiState.lobbyPlayers
+
+    AlertDialog(
+        onDismissRequest = { if (!isHost) mpVm.closeDialog() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Wifi, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("Game Room", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    if (isHost) "Waiting for players... (min 2 to start)"
+                    else "Waiting for host to start the game...",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(0.6f)
+                )
+                Spacer(Modifier.height(16.dp))
+
+                Text("Participants (${players.size})", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(Modifier.height(8.dp))
+
+                Column(Modifier.heightIn(max = 250.dp).verticalScroll(rememberScrollState())) {
+                    players.forEach { player ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(0.4f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(8.dp).background(Color(0xFF4CAF50), CircleShape))
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(player.name, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                    Text("IP: ${player.address}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(0.45f))
+                                }
+                                if (player.id == mpVm.uiState.playerId) {
+                                    Surface(color = MaterialTheme.colorScheme.primary.copy(0.2f), shape = RoundedCornerShape(4.dp)) {
+                                        Text("YOU", Modifier.padding(horizontal = 6.dp, vertical = 1.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                if (isHost) {
+                    Button(
+                        onClick = { mpVm.startMultiplayerGame() },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        enabled = players.size >= 2
+                    ) {
+                        Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("START GAME", fontWeight = FontWeight.Bold)
+                    }
+                    if (players.size < 2) {
+                        Text("Need at least 2 players", fontSize = 11.sp, color = MaterialTheme.colorScheme.error.copy(0.6f), modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            if (!isHost) {
+                TextButton(onClick = { mpVm.closeDialog() }) { Text("LEAVE") }
+            }
+        }
+    )
+}
+
+@Composable
+fun MultiplayerVictoryScreen(winnerId: String, winnerName: String, myId: String, onBackToLobby: () -> Unit, onBackToMenu: () -> Unit) {
+    val isWinner = winnerId == myId
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.7f)), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                if (isWinner) Icons.Default.EmojiEvents else Icons.Default.MilitaryTech,
+                null, Modifier.size(80.dp),
+                tint = if (isWinner) Color(0xFFFFD700) else Color.White.copy(0.5f)
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                if (isWinner) "YOU WIN!" else "$winnerName WINS!",
+                fontWeight = FontWeight.Black, fontSize = 40.sp, color = Color.White,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                if (isWinner) "Congratulations!" else "Better luck next time.",
+                color = Color.White.copy(0.6f), fontSize = 16.sp
+            )
+            Spacer(Modifier.height(40.dp))
+            Button(onClick = onBackToLobby, modifier = Modifier.width(200.dp)) {
+                Icon(Icons.Default.Replay, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("PLAY AGAIN", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = onBackToMenu) {
+                Text("BACK TO MENU", color = Color.White.copy(0.5f))
+            }
+        }
+
+        val particles = remember { List(60) { ConfettiParticle() } }
+        val infiniteTransition = rememberInfiniteTransition("victory_confetti")
+        val progress by infiniteTransition.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing)), "")
+        Canvas(Modifier.fillMaxSize()) {
+            particles.forEach { p ->
+                val y = (p.startY + (progress * 1800f * p.speed)) % size.height
+                val x = p.startX + (progress * 300f * p.drift)
+                drawRect(color = p.color, topLeft = Offset(x, y), size = Size(12f, 24f), alpha = 1f - (y / size.height).coerceIn(0f, 1f))
             }
         }
     }
@@ -121,33 +348,28 @@ fun CountdownOverlay(count: Int) {
 }
 
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, focusRequester: FocusRequester) {
+fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, focusRequester: FocusRequester, onSwitchToMultiplayer: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Box(
             Modifier.weight(1f).fillMaxWidth().padding(16.dp)
-                // TV 模式按键监听
                 .then(if (settings.isTVMode) {
-                    Modifier
-                        .focusRequester(focusRequester)
-                        .focusable()
-                        .onKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown) {
-                                when (event.nativeKeyEvent.keyCode) {
-                                    KeyEvent.KEYCODE_DPAD_UP -> { vm.setDirection(Direction.UP); true }
-                                    KeyEvent.KEYCODE_DPAD_DOWN -> { vm.setDirection(Direction.DOWN); true }
-                                    KeyEvent.KEYCODE_DPAD_LEFT -> { vm.setDirection(Direction.LEFT); true }
-                                    KeyEvent.KEYCODE_DPAD_RIGHT -> { vm.setDirection(Direction.RIGHT); true }
-                                    KeyEvent.KEYCODE_BACK -> { vm.togglePause(); true }
-                                    else -> false
-                                }
-                            } else false
-                        }
+                    Modifier.focusRequester(focusRequester).focusable().onKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown) {
+                            when (event.nativeKeyEvent.keyCode) {
+                                KeyEvent.KEYCODE_DPAD_UP -> { vm.setDirection(Direction.UP); true }
+                                KeyEvent.KEYCODE_DPAD_DOWN -> { vm.setDirection(Direction.DOWN); true }
+                                KeyEvent.KEYCODE_DPAD_LEFT -> { vm.setDirection(Direction.LEFT); true }
+                                KeyEvent.KEYCODE_DPAD_RIGHT -> { vm.setDirection(Direction.RIGHT); true }
+                                KeyEvent.KEYCODE_BACK -> { vm.togglePause(); true }
+                                else -> false
+                            }
+                        } else false
+                    }
                 } else Modifier)
-        ) { 
-            GameCanvasArea(state, settings, vm) 
+        ) {
+            GameCanvasArea(state, settings, vm, onSwitchToMultiplayer)
         }
-        
-        // 只有非 TV 模式且选择了按钮控制才显示按钮
+
         if (!settings.isTVMode && settings.controlMode == ControlMode.BUTTONS) {
             ControlButtonsRow(onDirChange = { vm.setDirection(it) })
             Spacer(Modifier.height(48.dp))
@@ -160,7 +382,7 @@ fun ControlButtonsRow(onDirChange: (Direction) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
         val size = 56.dp
         val containerColor = MaterialTheme.colorScheme.primaryContainer.copy(0.7f)
-        
+
         @Composable
         fun DirIconButton(icon: ImageVector, dir: Direction) {
             IconButton(onClick = { onDirChange(dir) }, modifier = Modifier.size(size).background(containerColor, CircleShape)) {
@@ -175,7 +397,7 @@ fun ControlButtonsRow(onDirChange: (Direction) -> Unit) {
 }
 
 @Composable
-fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel) {
+fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel, onSwitchToMultiplayer: () -> Unit = {}) {
     val colorScheme = MaterialTheme.colorScheme
     val infiniteTransition = rememberInfiniteTransition("game_anim")
     val decayAlpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(200), RepeatMode.Reverse), "flash")
@@ -197,45 +419,314 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel)
                     }
                 }
             }
-            Box(Modifier.size((cellSizePx * gridW / density).dp, (cellSizePx * gridH / density).dp).clip(RoundedCornerShape(12.dp)).background(colorScheme.surfaceVariant.copy(0.3f)).border(1.dp, colorScheme.outlineVariant.copy(0.3f), RoundedCornerShape(12.dp))) {
-                Canvas(Modifier.fillMaxSize().then(
-                    if (!settings.isTVMode && settings.controlMode == ControlMode.SWIPE) {
-                        Modifier.pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); vm.handleSwipe(drag.x, drag.y) } }
-                    } else Modifier
-                )) {
-                    if (settings.showGrid) {
-                        for (i in 0..gridW) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, size.height))
-                        for (i in 0..gridH) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(size.width, i * cellSizePx))
-                    }
-                    if (state.invincibleTimeRemaining > 0) {
-                        val progress = state.invincibleTimeRemaining.toFloat() / GameConfig.INVINCIBLE_DURATION_MS
-                        drawRect(Color(0xFF00E5FF), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
-                    } else if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
-                        val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
-                        drawRect(Color(ItemType.GHOST.colorHex), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
-                    }
-                    state.objects.forEach { obj ->
-                        val alpha = if (settings.enableItemDecay && obj.timeLeft < 5000L) decayAlpha else 1f
-                        drawCircle(Color(obj.type.colorHex).copy(alpha), (cellSizePx * 0.35f) * (if (alpha < 1f) decayScale else 1f), Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
-                    }
-                    state.snake.forEachIndexed { i, p ->
-                        val color = when {
-                            i == 0 && state.invincibleTimeRemaining > 0 -> Color(0xFF00E5FF)
-                            i == 0 && (state.ghostTimeRemaining > 0 || settings.isGhostPermanent) -> Color(ItemType.GHOST.colorHex)
-                            i == 0 && state.shieldCount > 0 -> Color(ItemType.SHIELD.colorHex)
-                            else -> colorScheme.primary
-                        }
-                        drawRoundRect(color.copy((1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)), Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f), Size(cellSizePx - 3f, cellSizePx - 3f), CornerRadius(4.dp.toPx()))
-                    }
+
+            Box(
+                Modifier.size(
+                    (cellSizePx * gridW / density).dp,
+                    (cellSizePx * gridH / density).dp
+                ).clip(RoundedCornerShape(12.dp)).background(colorScheme.surfaceVariant.copy(0.3f))
+                    .border(1.dp, colorScheme.outlineVariant.copy(0.3f), RoundedCornerShape(12.dp))
+            ) {
+                Canvas(
+                    Modifier.fillMaxSize().then(
+                        if (!settings.isTVMode && settings.controlMode == ControlMode.SWIPE) {
+                            Modifier.pointerInput(Unit) { detectDragGestures { change, drag -> change.consume(); vm.handleSwipe(drag.x, drag.y) } }
+                        } else Modifier
+                    )
+                ) {
+                    drawSinglePlayerGame(state, settings, cellSizePx, colorScheme, decayAlpha, decayScale)
                 }
+
                 if (!state.isStarted) {
-                    Button(onClick = { vm.startGame() }, Modifier.align(Alignment.Center).then(if (settings.isTVMode) Modifier.focusable() else Modifier)) { 
-                        Text("START") 
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.6f)), contentAlignment = Alignment.Center) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { vm.startGame() },
+                                modifier = Modifier.height(52.dp).width(140.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("START", fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = onSwitchToMultiplayer,
+                                modifier = Modifier.height(52.dp).width(160.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                            ) {
+                                Icon(Icons.Default.People, null, Modifier.size(20.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("MULTIPLAYER", fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }
         }
         if (state.isGameOver && state.score >= state.highScore && state.score > 0) ConfettiEffect()
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSinglePlayerGame(
+    state: SnakeState,
+    settings: GameSettings,
+    cellSizePx: Float,
+    colorScheme: androidx.compose.material3.ColorScheme,
+    decayAlpha: Float,
+    decayScale: Float
+) {
+    if (settings.showGrid) {
+        for (i in 0..state.gridWidth) drawLine(colorScheme.onSurface.copy(0.05f), Offset(i * cellSizePx, 0f), Offset(i * cellSizePx, size.height))
+        for (i in 0..state.gridHeight) drawLine(colorScheme.onSurface.copy(0.05f), Offset(0f, i * cellSizePx), Offset(size.width, i * cellSizePx))
+    }
+    if (state.invincibleTimeRemaining > 0) {
+        val progress = state.invincibleTimeRemaining.toFloat() / GameConfig.INVINCIBLE_DURATION_MS
+        drawRect(Color(0xFF00E5FF), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
+    } else if (state.ghostTimeRemaining > 0 && !settings.isGhostPermanent) {
+        val progress = state.ghostTimeRemaining.toFloat() / GameConfig.GHOST_DURATION_MS
+        drawRect(Color(ItemType.GHOST.colorHex), Offset(0f, 0f), Size(size.width * progress, 4.dp.toPx()))
+    }
+    state.objects.forEach { obj ->
+        val alpha = if (settings.enableItemDecay && obj.timeLeft < 5000L) decayAlpha else 1f
+        drawCircle(Color(obj.type.colorHex).copy(alpha), (cellSizePx * 0.35f) * (if (alpha < 1f) decayScale else 1f), Offset(obj.pos.first * cellSizePx + cellSizePx / 2f, obj.pos.second * cellSizePx + cellSizePx / 2f))
+    }
+    state.snake.forEachIndexed { i, p ->
+        val color = when {
+            i == 0 && state.invincibleTimeRemaining > 0 -> Color(0xFF00E5FF)
+            i == 0 && (state.ghostTimeRemaining > 0 || settings.isGhostPermanent) -> Color(ItemType.GHOST.colorHex)
+            i == 0 && state.shieldCount > 0 -> Color(ItemType.SHIELD.colorHex)
+            else -> colorScheme.primary
+        }
+        drawRoundRect(color.copy((1f - (i.toFloat() / state.snake.size)).coerceAtLeast(0.2f)), Offset(p.first * cellSizePx + 1.5f, p.second * cellSizePx + 1.5f), Size(cellSizePx - 3f, cellSizePx - 3f), CornerRadius(4.dp.toPx()))
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMultiplayerGame(
+    state: SerializedGameState,
+    cellSizePx: Float,
+    viewOffX: Float,
+    viewOffY: Float,
+    viewW: Float,
+    viewH: Float
+) {
+    val gridColor = Color(0xFF1E3A5F).copy(0.3f)
+    val startX = (-viewOffX % cellSizePx).let { if (it < 0) it + cellSizePx else it }
+    val startY = (-viewOffY % cellSizePx).let { if (it < 0) it + cellSizePx else it }
+
+    var x = startX
+    while (x < viewW) {
+        drawLine(gridColor, Offset(x, 0f), Offset(x, viewH))
+        x += cellSizePx
+    }
+    var y = startY
+    while (y < viewH) {
+        drawLine(gridColor, Offset(0f, y), Offset(viewW, y))
+        y += cellSizePx
+    }
+
+    val visLeft = (-viewOffX / cellSizePx).toInt() - 1
+    val visTop = (-viewOffY / cellSizePx).toInt() - 1
+    val visRight = visLeft + (viewW / cellSizePx).toInt() + 2
+    val visBottom = visTop + (viewH / cellSizePx).toInt() + 2
+
+    state.objects.forEach { obj ->
+        val sx = obj.x * cellSizePx + viewOffX + cellSizePx / 2f
+        val sy = obj.y * cellSizePx + viewOffY + cellSizePx / 2f
+        if (sx in -cellSizePx..viewW + cellSizePx && sy in -cellSizePx..viewH + cellSizePx) {
+            val color = try { Color(ItemType.valueOf(obj.typeName).colorHex) } catch (_: Exception) { Color.Gray }
+            drawCircle(color.copy(0.8f), cellSizePx * 0.3f, Offset(sx, sy))
+        }
+    }
+
+    state.players.sortedBy { it.score }.forEach { player ->
+        if (!player.isAlive) return@forEach
+        val color = playerColor(player.colorIndex)
+        val alpha = if (player.snake.isEmpty()) 0f else 1f
+
+        player.snake.forEachIndexed { i, seg ->
+            val sx = seg.x * cellSizePx + viewOffX
+            val sy = seg.y * cellSizePx + viewOffY
+            if (sx in -cellSizePx..viewW + cellSizePx && sy in -cellSizePx..viewH + cellSizePx) {
+                val segmentAlpha = alpha * (1f - (i.toFloat() / player.snake.size.coerceAtLeast(1)) * 0.7f).coerceAtLeast(0.3f)
+                val isHead = i == 0
+                if (isHead) {
+                    drawRoundRect(color.copy(segmentAlpha), Offset(sx + 1f, sy + 1f), Size(cellSizePx - 2f, cellSizePx - 2f), CornerRadius(cellSizePx * 0.3f))
+                } else {
+                    drawRoundRect(color.copy(segmentAlpha), Offset(sx + 1.5f, sy + 1.5f), Size(cellSizePx - 3f, cellSizePx - 3f), CornerRadius(4.dp.toPx()))
+                }
+            }
+        }
+
+        if (player.snake.isNotEmpty()) {
+            val head = player.snake.first()
+            val hx = head.x * cellSizePx + viewOffX
+            val hy = head.y * cellSizePx + viewOffY - cellSizePx * 0.4f
+            if (hx in -cellSizePx * 2..viewW + cellSizePx * 2 && hy in -cellSizePx * 2..viewH + cellSizePx * 2) {
+                drawIntoCanvas { canvas ->
+                    canvas.nativeCanvas.drawText(
+                        player.name, hx, hy,
+                        Paint().apply {
+                            setColor(android.graphics.Color.WHITE)
+                            textSize = cellSizePx * 0.45f
+                            textAlign = Paint.Align.CENTER
+                            isFakeBoldText = true
+                            setShadowLayer(3f, 0f, 0f, android.graphics.Color.BLACK)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun playerColor(index: Int): Color {
+    val colors = listOf(
+        0xFF4CAF50, 0xFF2196F3, 0xFFFF9800, 0xFFE91E63,
+        0xFF9C27B0, 0xFF00BCD4, 0xFFFF5722, 0xFF8BC34A,
+        0xFF607D8B, 0xFF795548, 0xFFCDDC39, 0xFF03A9F4
+    )
+    return Color(colors[index % colors.size])
+}
+
+@Composable
+fun MultiplayerLeaderboardOverlay(state: SerializedGameState) {
+    val sorted = state.players.sortedByDescending { it.score }
+    if (sorted.isEmpty()) return
+
+    Box(Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.TopEnd) {
+        Surface(
+            color = Color.Black.copy(0.55f),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.width(140.dp)
+        ) {
+            Column(Modifier.padding(8.dp)) {
+                Text("LEADERBOARD", fontWeight = FontWeight.Black, fontSize = 10.sp, color = Color.White.copy(0.7f))
+                Spacer(Modifier.height(6.dp))
+                sorted.forEachIndexed { i, player ->
+                    val rankColor = when (i) {
+                        0 -> Color(0xFFFFD700)
+                        1 -> Color(0xFFC0C0C0)
+                        2 -> Color(0xFFCD7F32)
+                        else -> Color.White.copy(0.6f)
+                    }
+                    val medal = when (i) {
+                        0 -> "1st"
+                        1 -> "2nd"
+                        2 -> "3rd"
+                        else -> "${i + 1}th"
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(medal, fontWeight = FontWeight.Bold, fontSize = 9.sp, color = rankColor, modifier = Modifier.width(24.dp))
+                        Text(
+                            player.name,
+                            fontSize = if (i < 3) 11.sp else 10.sp,
+                            fontWeight = if (i < 3) FontWeight.Bold else FontWeight.Normal,
+                            color = Color.White,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1
+                        )
+                        Text("${player.score}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = rankColor)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MultiplayerGameView(mpVm: MultiplayerViewModel) {
+    val state = mpVm.uiState.gameState ?: return
+    val focusRequester = remember { FocusRequester() }
+
+    Column(Modifier.fillMaxSize().background(Color(0xFF0F0F23))) {
+        Box(Modifier.weight(1f).fillMaxWidth().padding(8.dp)) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val density = LocalContext.current.resources.displayMetrics.density
+                val cellSizePx = 14f * density
+                val gridW = state.gridWidth
+                val gridH = state.gridHeight
+
+                val myPlayer = mpVm.uiState.playerId.let { myId ->
+                    state.players.find { it.id == myId } ?: state.players.firstOrNull()
+                }
+                val viewOffX = if (myPlayer != null && myPlayer.snake.isNotEmpty()) {
+                    -(myPlayer.snake.first().x * cellSizePx - constraints.maxWidth / 2f)
+                } else 0f
+                val viewOffY = if (myPlayer != null && myPlayer.snake.isNotEmpty()) {
+                    -(myPlayer.snake.first().y * cellSizePx - constraints.maxHeight / 2f)
+                } else 0f
+
+                Canvas(
+                    Modifier.fillMaxSize()
+                        .focusRequester(focusRequester)
+                        .focusable()
+                        .onKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown) {
+                                when (event.nativeKeyEvent.keyCode) {
+                                    KeyEvent.KEYCODE_DPAD_UP -> { mpVm.sendDirection("UP"); true }
+                                    KeyEvent.KEYCODE_DPAD_DOWN -> { mpVm.sendDirection("DOWN"); true }
+                                    KeyEvent.KEYCODE_DPAD_LEFT -> { mpVm.sendDirection("LEFT"); true }
+                                    KeyEvent.KEYCODE_DPAD_RIGHT -> { mpVm.sendDirection("RIGHT"); true }
+                                    else -> false
+                                }
+                            } else false
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dir = if (kotlin.math.abs(drag.x) > kotlin.math.abs(drag.y)) {
+                                    if (drag.x > 0) "RIGHT" else "LEFT"
+                                } else {
+                                    if (drag.y > 0) "DOWN" else "UP"
+                                }
+                                mpVm.sendDirection(dir)
+                            }
+                        }
+                ) {
+                    drawMultiplayerGame(state, cellSizePx, viewOffX, viewOffY, constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
+                }
+
+                LaunchedEffect(Unit) { focusRequester.requestFocus() }
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            color = Color.Black.copy(0.3f),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(Modifier.padding(8.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                val dirs = listOf(
+                    Triple(Icons.Default.ArrowUpward, "UP", Modifier.align(Alignment.CenterVertically)),
+                    Triple(Icons.Default.ArrowDownward, "DOWN", Modifier.align(Alignment.CenterVertically)),
+                    Triple(Icons.Default.ArrowBack, "LEFT", Modifier.align(Alignment.CenterVertically)),
+                    Triple(Icons.Default.ArrowForward, "RIGHT", Modifier.align(Alignment.CenterVertically))
+                )
+                dirs.forEach { (icon, dir, _) ->
+                    IconButton(
+                        onClick = { mpVm.sendDirection(dir) },
+                        modifier = Modifier.size(48.dp).background(Color.White.copy(0.1f), CircleShape)
+                    ) {
+                        Icon(icon, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+    }
+
+    val stateData = mpVm.uiState.gameState
+    if (stateData != null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
+            MultiplayerLeaderboardOverlay(stateData)
+        }
     }
 }
 
@@ -245,12 +736,10 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
         title = { Text("Configuration", fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                // TV 模式切换
-                SettingRow("TV Mode Adapter") { 
-                    Switch(checked = settings.isTVMode, onCheckedChange = { onUpdate(settings.copy(isTVMode = it)) }) 
+                SettingRow("TV Mode Adapter") {
+                    Switch(checked = settings.isTVMode, onCheckedChange = { onUpdate(settings.copy(isTVMode = it)) })
                 }
-                
-                // 只有非 TV 模式显示控制方式切换
+
                 if (!settings.isTVMode) {
                     Row(Modifier.fillMaxWidth().height(56.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                         Text("Control Mode", fontSize = 14.sp)
@@ -266,12 +755,11 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                         }
                     }
                 }
-                
+
                 SettingRow("Loop Mode") { Switch(checked = settings.isLoopMode, onCheckedChange = { onUpdate(settings.copy(isLoopMode = it)) }) }
                 SettingRow("Vibration") { Switch(checked = settings.enableVibration, onCheckedChange = { onUpdate(settings.copy(enableVibration = it)) }) }
                 SettingRow("Item Decay") { Switch(checked = settings.enableItemDecay, onCheckedChange = { onUpdate(settings.copy(enableItemDecay = it)) }) }
-                
-                // TV 模式下移除 Slider，代之以简单的步进器或固定配置以减少遥控操作难度
+
                 if (!settings.isTVMode) {
                     Spacer(Modifier.height(8.dp))
                     Text("Max Items: ${settings.maxObjects}", style = MaterialTheme.typography.labelMedium)
@@ -279,7 +767,7 @@ fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (Gam
                     Text("Cell Size: ${settings.targetCellSize.toInt()}dp", style = MaterialTheme.typography.labelMedium)
                     Slider(value = settings.targetCellSize, onValueChange = { onUpdate(settings.copy(targetCellSize = it)) }, valueRange = 16f..40f)
                 }
-                
+
                 HorizontalDivider(Modifier.padding(vertical = 12.dp))
                 ItemType.entries.forEach { type ->
                     Row(Modifier.fillMaxWidth().height(40.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -306,11 +794,11 @@ fun SettingRow(label: String, content: @Composable () -> Unit) {
 
 @Composable
 fun ResultDialog(state: SnakeState, settings: GameSettings, onRestart: () -> Unit, onOpenSettings: () -> Unit) {
-    AlertDialog(onDismissRequest = {}, 
+    AlertDialog(onDismissRequest = {},
         confirmButton = {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                Button(onClick = onOpenSettings, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)) { 
-                    Icon(Icons.Default.Settings, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("SETTINGS") 
+                Button(onClick = onOpenSettings, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)) {
+                    Icon(Icons.Default.Settings, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("SETTINGS")
                 }
                 Spacer(Modifier.width(12.dp)); Button(onClick = onRestart) { Icon(Icons.Default.Replay, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("REPLAY") }
             }
@@ -326,9 +814,9 @@ fun ResultDialog(state: SnakeState, settings: GameSettings, onRestart: () -> Uni
 @Composable
 fun PauseStatsDialog(state: SnakeState, onResume: () -> Unit) {
     AlertDialog(onDismissRequest = onResume, confirmButton = { Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Button(onClick = onResume) { Text("RESUME") } } },
-        title = { Text("Paused", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold) }, 
-        text = { Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { 
-            Text("Current Score: ${state.score}", fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp)); StatsList(state.itemsCollected) 
+        title = { Text("Paused", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontWeight = FontWeight.Bold) },
+        text = { Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Current Score: ${state.score}", fontWeight = FontWeight.Bold); Spacer(Modifier.height(16.dp)); StatsList(state.itemsCollected)
         }}
     )
 }
@@ -386,8 +874,7 @@ fun GameTopBar(state: SnakeState, settings: GameSettings, onTogglePause: () -> U
             ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary)
         }
         Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center))
-        
-        // TV 模式下隐藏顶栏按钮，仅保留信息展示
+
         if (!settings.isTVMode) {
             Row(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
                 if (state.isStarted && !state.isGameOver) {

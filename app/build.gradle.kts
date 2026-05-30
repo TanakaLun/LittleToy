@@ -4,6 +4,8 @@ import java.io.FileInputStream
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -14,12 +16,12 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "io.tl.snake"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.tl.snake"
         minSdk = 31
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
@@ -41,6 +43,10 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
     }
     
     splits {
@@ -106,4 +112,9 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation("androidx.compose.material:material-icons-extended")
+    implementation(libs.androidx.room.runtime)
+    ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.room.ktx)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.core)
 }

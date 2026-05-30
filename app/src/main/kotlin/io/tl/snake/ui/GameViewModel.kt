@@ -1,66 +1,40 @@
 package io.tl.snake.ui
 
 import android.app.Application
-import android.content.Context
-import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.tl.snake.data.GameRepository
 import io.tl.snake.logic.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
-    private val sp = application.getSharedPreferences("snake_prefs", Context.MODE_PRIVATE)
-    
+    private val repository = GameRepository(application)
+
     var state by mutableStateOf(SnakeState())
         private set
     var settings by mutableStateOf(GameSettings())
         private set
-    var countdown by mutableStateOf(0) 
+    var countdown by mutableStateOf(0)
         private set
 
     init {
-        loadData()
+        viewModelScope.launch { loadData() }
         startGameLoop()
     }
 
-    private fun loadData() {
-        val hs = sp.getInt("hs", 0)
-        val jsonStr = sp.getString("settings", null) ?: return
-        try {
-            val json = JSONObject(jsonStr)
-            val itemMap = ItemType.entries.associateWith { type -> 
-                json.optJSONObject("enabledItems")?.optBoolean(type.name, true) ?: true 
-            }
-            settings = GameSettings(
-                showGrid = json.optBoolean("showGrid", true),
-                isLoopMode = json.optBoolean("isLoopMode", false),
-                dynamicGrid = json.optBoolean("dynamicGrid", true),
-                enableVibration = json.optBoolean("enableVibration", true),
-                maxObjects = json.optInt("maxObjects", 5),
-                enableItemDecay = json.optBoolean("enableItemDecay", true),
-                targetCellSize = json.optDouble("targetCellSize", 22.0).toFloat(),
-                isGhostPermanent = json.optBoolean("isGhostPermanent", false),
-                controlMode = ControlMode.valueOf(json.optString("controlMode", "SWIPE")),
-                isTVMode = json.optBoolean("isTVMode", false),
-                enabledItems = itemMap
-            )
-            state = state.copy(highScore = hs)
-        } catch (e: Exception) { e.printStackTrace() }
+    private suspend fun loadData() {
+        val hs = repository.loadHighScore()
+        repository.loadSettings()?.let { settings = it }
+        state = state.copy(highScore = hs)
     }
 
-    private fun saveData() {
-        val json = JSONObject().apply {
-            put("showGrid", settings.showGrid); put("isLoopMode", settings.isLoopMode)
-            put("dynamicGrid", settings.dynamicGrid); put("enableVibration", settings.enableVibration)
-            put("maxObjects", settings.maxObjects); put("enableItemDecay", settings.enableItemDecay)
-            put("targetCellSize", settings.targetCellSize.toDouble()); put("isGhostPermanent", settings.isGhostPermanent)
-            put("controlMode", settings.controlMode.name)
-            put("isTVMode", settings.isTVMode)
-            put("enabledItems", JSONObject().apply { settings.enabledItems.forEach { (k, v) -> put(k.name, v) } })
-        }
-        sp.edit().putString("settings", json.toString()).putInt("hs", state.highScore).apply()
+    private suspend fun saveData() {
+        repository.saveHighScore(state.highScore)
+        repository.saveSettings(settings)
     }
 
     private fun startGameLoop() {
@@ -93,11 +67,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun handleSwipe(dx: Float, dy: Float) {
         val newDir = when {
-            kotlin.math.abs(dx) > kotlin.math.abs(dy) -> 
-                if (dx > 0 && state.direction != Direction.LEFT) Direction.RIGHT 
+            kotlin.math.abs(dx) > kotlin.math.abs(dy) ->
+                if (dx > 0 && state.direction != Direction.LEFT) Direction.RIGHT
                 else if (dx < 0 && state.direction != Direction.RIGHT) Direction.LEFT else state.direction
-            else -> 
-                if (dy > 0 && state.direction != Direction.UP) Direction.DOWN 
+            else ->
+                if (dy > 0 && state.direction != Direction.UP) Direction.DOWN
                 else if (dy < 0 && state.direction != Direction.DOWN) Direction.UP else state.direction
         }
         state = state.copy(direction = newDir)
@@ -105,13 +79,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDirection(dir: Direction) {
         val isValid = when (dir) {
-            Direction.UP -> state.direction != Direction.DOWN; Direction.DOWN -> state.direction != Direction.UP
-            Direction.LEFT -> state.direction != Direction.RIGHT; Direction.RIGHT -> state.direction != Direction.LEFT
+            Direction.UP -> state.direction != Direction.DOWN
+            Direction.DOWN -> state.direction != Direction.UP
+            Direction.LEFT -> state.direction != Direction.RIGHT
+            Direction.RIGHT -> state.direction != Direction.LEFT
         }
         if (isValid) state = state.copy(direction = dir)
     }
 
-    fun togglePause() { 
+    fun togglePause() {
         if (!state.isPaused) state = state.copy(isPaused = true)
         else startResumeCountdown()
     }
@@ -122,7 +98,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         state = SnakeState(highScore = state.highScore, isStarted = true, gridWidth = state.gridWidth, gridHeight = state.gridHeight)
     }
     fun updateGridSize(w: Int, h: Int) { if (state.gridWidth != w || state.gridHeight != h) state = state.copy(gridWidth = w, gridHeight = h) }
-    fun updateSettings(newSettings: GameSettings) { settings = newSettings; saveData() }
-    fun resetHighScore() { state = state.copy(highScore = 0); saveData() }
-    private fun checkHighScore() { if (state.score > state.highScore) { state = state.copy(highScore = state.score); saveData() } }
+
+    fun updateSettings(newSettings: GameSettings) {
+        settings = newSettings
+        viewModelScope.launch { saveData() }
+    }
+
+    fun resetHighScore() {
+        state = state.copy(highScore = 0)
+        viewModelScope.launch { saveData() }
+    }
+
+    private fun checkHighScore() {
+        if (state.score > state.highScore) {
+            state = state.copy(highScore = state.score)
+            viewModelScope.launch { saveData() }
+        }
+    }
 }
