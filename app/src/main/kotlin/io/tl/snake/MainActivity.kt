@@ -47,6 +47,7 @@ import io.tl.snake.network.SerializedPlayerState
 import io.tl.snake.ui.GameViewModel
 import io.tl.snake.ui.theme.MyTheme
 import kotlin.random.Random
+import kotlinx.coroutines.delay
 
 val ItemType.icon: ImageVector get() = when(this) {
     ItemType.FOOD_BASIC -> Icons.Default.Fastfood; ItemType.FOOD_GOLD -> Icons.Default.Star
@@ -460,7 +461,7 @@ fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, fo
                     }
                 } else Modifier)
         ) {
-            GameCanvasArea(state, settings, vm, onSwitchToMultiplayer, startButtonFocus)
+            GameCanvasArea(state, settings, vm, onSwitchToMultiplayer, startButtonFocus, mpButtonFocus)
         }
 
         if (!settings.isTVMode && settings.controlMode == ControlMode.BUTTONS) {
@@ -492,7 +493,7 @@ fun ControlButtonsRow(onDirChange: (Direction) -> Unit) {
 }
 
 @Composable
-fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel, onSwitchToMultiplayer: () -> Unit = {}, startButtonFocus: FocusRequester? = null) {
+fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel, onSwitchToMultiplayer: () -> Unit = {}, startButtonFocus: FocusRequester? = null, mpButtonFocus: FocusRequester? = null) {
     val colorScheme = MaterialTheme.colorScheme
     val infiniteTransition = rememberInfiniteTransition("game_anim")
     val decayAlpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(200), RepeatMode.Reverse), "flash")
