@@ -62,14 +62,14 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
         if (isRunning) return
         isRunning = true
 
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             try {
                 serverSocket = ServerSocket(TCP_PORT)
                 startDiscoveryBroadcast()
 
                 while (isRunning) {
                     val client = serverSocket!!.accept()
-                    scope.launch { handleClient(client) }
+                    scope.launch(Dispatchers.IO) { handleClient(client) }
                 }
             } catch (e: Exception) {
                 if (isRunning) e.printStackTrace()

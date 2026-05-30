@@ -101,16 +101,11 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
     private fun observeClient() {
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
-            val clientStatusJob = launch {
+            launch {
                 client?.status?.collectLatest { status ->
-                    val newLobbyPlayers = if (uiState.isHost && server != null) {
-                        server!!.status.value.players
-                    } else {
-                        status.lobbyPlayers
-                    }
                     uiState = uiState.copy(
                         playerId = status.playerId,
-                        lobbyPlayers = newLobbyPlayers,
+                        lobbyPlayers = status.lobbyPlayers,
                         gameStarted = status.gameStarted
                     )
                     if (status.gameStarted) {
@@ -119,13 +114,13 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
 
-            val gameStateJob = launch {
+            launch {
                 client?.gameState?.collectLatest { gs ->
                     if (gs != null) uiState = uiState.copy(gameState = gs)
                 }
             }
 
-            val gameOverJob = launch {
+            launch {
                 client?.gameOver?.collectLatest { result ->
                     if (result != null) {
                         val (winnerId, winnerName) = result
@@ -139,7 +134,7 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
 
-            val serverStatusJob = launch {
+            launch {
                 server?.status?.collectLatest { serverStatus ->
                     if (uiState.isHost) {
                         uiState = uiState.copy(
@@ -148,8 +143,6 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 }
             }
-
-            listOf(clientStatusJob, gameStateJob, gameOverJob, serverStatusJob).forEach { it.join() }
         }
     }
 
