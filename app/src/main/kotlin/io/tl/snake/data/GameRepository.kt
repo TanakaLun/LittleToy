@@ -4,12 +4,15 @@ import android.content.Context
 import io.tl.snake.logic.ControlMode
 import io.tl.snake.logic.GameSettings
 import io.tl.snake.logic.ItemType
+import io.tl.snake.network.PlayerIdentity
 import org.json.JSONObject
+import java.util.UUID
 
 class GameRepository(private val context: Context) {
     private val db = AppDatabase.getInstance(context)
     private val highScoreDao = db.highScoreDao()
     private val settingsDao = db.settingsDao()
+    private val playerIdentityDao = db.playerIdentityDao()
 
     suspend fun loadHighScore(): Int {
         migrateFromSharedPrefsIfNeeded()
@@ -85,5 +88,31 @@ class GameRepository(private val context: Context) {
         }
 
         sp.edit().clear().apply()
+    }
+
+    suspend fun loadPlayerIdentity(): PlayerIdentity {
+        migratePlayerIdentityFromSharedPrefsIfNeeded()
+        val entity = playerIdentityDao.get()
+        if (entity != null) {
+            return PlayerIdentity(playerId = entity.playerId, playerName = entity.playerName)
+        }
+        val newIdentity = PlayerIdentity()
+        playerIdentityDao.upsert(PlayerIdentityEntity(playerId = newIdentity.playerId, playerName = newIdentity.playerName))
+        return newIdentity
+    }
+
+    suspend fun savePlayerIdentity(identity: PlayerIdentity) {
+        playerIdentityDao.upsert(PlayerIdentityEntity(playerId = identity.playerId, playerName = identity.playerName))
+    }
+
+    private suspend fun migratePlayerIdentityFromSharedPrefsIfNeeded() {
+        if (playerIdentityDao.get() != null) return
+        val sp = context.getSharedPreferences("snake_identity", Context.MODE_PRIVATE)
+        val id = sp.getString("player_id", null)
+        val name = sp.getString("player_name", "Player") ?: "Player"
+        if (id != null) {
+            playerIdentityDao.upsert(PlayerIdentityEntity(playerId = id, playerName = name))
+            sp.edit().clear().apply()
+        }
     }
 }

@@ -1,6 +1,5 @@
 package io.tl.snake
 
-import android.content.Context
 import android.graphics.Paint
 import android.os.*
 import android.view.KeyEvent
@@ -14,6 +13,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -31,6 +32,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,14 +67,15 @@ class MainActivity : ComponentActivity() {
                 val state = vm.state
                 val settings = vm.settings
                 var showSettings by remember { mutableStateOf(false) }
-                val vibrator = LocalContext.current.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                var showPlayerNameDialog by remember { mutableStateOf(false) }
+                val vibrator = LocalContext.current.getSystemService(Vibrator::class.java)!!
                 val focusRequester = remember { FocusRequester() }
 
                 LaunchedEffect(state.lastEvent) {
                     if (settings.enableVibration && state.lastEvent != null) {
                         val ms = when (state.lastEvent) {
                             GameEvent.EAT_GOOD -> 30L; GameEvent.EAT_BAD -> 80L
-                            GameEvent.SHIELD_BREAK -> 150L; GameEvent.HIT_WALL -> 250L; else -> 0L
+                            GameEvent.SHIELD_BREAK -> 150L; GameEvent.HIT_WALL -> 250L
                         }
                         if (ms > 0) vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
                     }
@@ -99,21 +102,29 @@ class MainActivity : ComponentActivity() {
                                 onBackToLobby = { mpVm.backToLobby() },
                                 onBackToMenu = { mpVm.closeDialog() }
                             )
-                            else -> {}
                         }
                     } else {
                         Scaffold(
                             topBar = { GameTopBar(state, settings, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
                         ) { p ->
                             Box(Modifier.padding(p).fillMaxSize()) {
-                                GameContent(state, settings, vm, focusRequester, onSwitchToMultiplayer = { mpVm.openMultiplayerDialog() })
+                                GameContent(state, settings, vm, focusRequester, onSwitchToMultiplayer = {
+                                    if (mpVm.uiState.playerName.isBlank()) showPlayerNameDialog = true
+                                    else mpVm.openMultiplayerDialog()
+                                })
 
                                 if (showSettings) {
-                                    SettingsDialog(settings, onDismiss = { showSettings = false; vm.startResumeCountdown() }, onUpdate = { vm.updateSettings(it) })
+                                    SettingsDialog(
+                                        settings = settings,
+                                        playerName = mpVm.uiState.playerName,
+                                        onDismiss = { showSettings = false; vm.startResumeCountdown() },
+                                        onUpdate = { vm.updateSettings(it) },
+                                        onRename = { showSettings = false; showPlayerNameDialog = true }
+                                    )
                                 }
                                 if (state.isGameOver) {
                                     ResultDialog(state, settings, onRestart = { vm.restartGame() }, onOpenSettings = { showSettings = true })
-                                } else if (state.isPaused && vm.countdown == 0 && !showSettings) {
+                                } else if (state.isStarted && state.isPaused && vm.countdown == 0 && !showSettings) {
                                     PauseStatsDialog(state) { vm.togglePause() }
                                 }
                             }
@@ -125,6 +136,17 @@ class MainActivity : ComponentActivity() {
 
                     if (mpVm.uiState.showDialog) {
                         MultiplayerDialog(mpVm)
+                    }
+
+                    if (showPlayerNameDialog) {
+                        PlayerNameDialog(
+                            currentName = mpVm.uiState.playerName,
+                            onConfirm = { name ->
+                                mpVm.updatePlayerName(name)
+                                showPlayerNameDialog = false
+                            },
+                            onDismiss = { showPlayerNameDialog = false }
+                        )
                     }
                 }
             }
@@ -139,6 +161,35 @@ fun MultiplayerDialog(mpVm: MultiplayerViewModel) {
         MultiplayerScreen.LOBBY -> MultiplayerLobbyDialog(mpVm)
         else -> {}
     }
+}
+
+@Composable
+fun PlayerNameDialog(currentName: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(currentName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Enter Your Name", fontWeight = FontWeight.Bold) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(16) },
+                label = { Text("Player Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (name.isNotBlank()) onConfirm(name.trim()) })
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (name.isNotBlank()) onConfirm(name.trim()) },
+                enabled = name.isNotBlank()
+            ) { Text("CONFIRM") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("CANCEL") }
+        }
+    )
 }
 
 @Composable
@@ -211,10 +262,12 @@ fun RoomBrowserDialog(mpVm: MultiplayerViewModel) {
 @Composable
 fun MultiplayerLobbyDialog(mpVm: MultiplayerViewModel) {
     val isHost = mpVm.uiState.isHost
-    val players = mpVm.uiState.lobbyPlayers
+    val players = remember(mpVm.uiState.lobbyPlayers) {
+        mpVm.uiState.lobbyPlayers.sortedByDescending { it.isHost }
+    }
 
     AlertDialog(
-        onDismissRequest = { if (!isHost) mpVm.closeDialog() },
+        onDismissRequest = { mpVm.backToBrowser() },
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Wifi, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
@@ -234,18 +287,42 @@ fun MultiplayerLobbyDialog(mpVm: MultiplayerViewModel) {
                 Text("Participants (${players.size})", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(Modifier.height(8.dp))
 
-                Column(Modifier.heightIn(max = 250.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                     players.forEach { player ->
+                        val isHostPlayer = player.isHost
                         Surface(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(0.4f),
+                            color = if (isHostPlayer) MaterialTheme.colorScheme.tertiaryContainer.copy(0.5f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(0.4f),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(8.dp).background(Color(0xFF4CAF50), CircleShape))
+                                Box(
+                                    Modifier.size(8.dp).background(
+                                        if (isHostPlayer) Color(0xFFFFD700) else Color(0xFF4CAF50),
+                                        CircleShape
+                                    )
+                                )
                                 Spacer(Modifier.width(10.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(player.name, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(player.name, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                        if (isHostPlayer) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.tertiary.copy(0.2f),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    "HOST",
+                                                    Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Black,
+                                                    color = MaterialTheme.colorScheme.tertiary
+                                                )
+                                            }
+                                        }
+                                    }
                                     Text("IP: ${player.address}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(0.45f))
                                 }
                                 if (player.id == mpVm.uiState.playerId) {
@@ -274,14 +351,25 @@ fun MultiplayerLobbyDialog(mpVm: MultiplayerViewModel) {
                         Text("Need at least 2 players", fontSize = 11.sp, color = MaterialTheme.colorScheme.error.copy(0.6f), modifier = Modifier.padding(top = 4.dp))
                     }
                 }
+
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { mpVm.backToBrowser() },
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    @Suppress("DEPRECATION")
+                    Icon(Icons.Default.ArrowBack, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("BACK", fontWeight = FontWeight.Bold)
+                }
             }
         },
         confirmButton = {},
-        dismissButton = {
-            if (!isHost) {
-                TextButton(onClick = { mpVm.closeDialog() }) { Text("LEAVE") }
-            }
-        }
+        dismissButton = {}
     )
 }
 
@@ -389,9 +477,11 @@ fun ControlButtonsRow(onDirChange: (Direction) -> Unit) {
                 Icon(icon, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
             }
         }
+        @Suppress("DEPRECATION")
         DirIconButton(Icons.Default.ArrowBack, Direction.LEFT)
         DirIconButton(Icons.Default.ArrowUpward, Direction.UP)
         DirIconButton(Icons.Default.ArrowDownward, Direction.DOWN)
+        @Suppress("DEPRECATION")
         DirIconButton(Icons.Default.ArrowForward, Direction.RIGHT)
     }
 }
@@ -439,13 +529,13 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel,
 
                 if (!state.isStarted) {
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(0.6f)), contentAlignment = Alignment.Center) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Button(
                                 onClick = { vm.startGame() },
-                                modifier = Modifier.height(52.dp).width(140.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
+                                modifier = Modifier.height(52.dp).width(180.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
                                 Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
@@ -454,8 +544,11 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel,
                             }
                             Button(
                                 onClick = onSwitchToMultiplayer,
-                                modifier = Modifier.height(52.dp).width(160.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                                modifier = Modifier.height(52.dp).width(180.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiary,
+                                    contentColor = MaterialTheme.colorScheme.onTertiary
+                                )
                             ) {
                                 Icon(Icons.Default.People, null, Modifier.size(20.dp))
                                 Spacer(Modifier.width(6.dp))
@@ -705,7 +798,9 @@ fun MultiplayerGameView(mpVm: MultiplayerViewModel) {
                 val dirs = listOf(
                     Triple(Icons.Default.ArrowUpward, "UP", Modifier.align(Alignment.CenterVertically)),
                     Triple(Icons.Default.ArrowDownward, "DOWN", Modifier.align(Alignment.CenterVertically)),
+                    @Suppress("DEPRECATION")
                     Triple(Icons.Default.ArrowBack, "LEFT", Modifier.align(Alignment.CenterVertically)),
+                    @Suppress("DEPRECATION")
                     Triple(Icons.Default.ArrowForward, "RIGHT", Modifier.align(Alignment.CenterVertically))
                 )
                 dirs.forEach { (icon, dir, _) ->
@@ -731,13 +826,37 @@ fun MultiplayerGameView(mpVm: MultiplayerViewModel) {
 }
 
 @Composable
-fun SettingsDialog(settings: GameSettings, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit) {
+fun SettingsDialog(settings: GameSettings, playerName: String, onDismiss: () -> Unit, onUpdate: (GameSettings) -> Unit, onRename: () -> Unit) {
     AlertDialog(onDismissRequest = onDismiss, confirmButton = { Button(onClick = onDismiss) { Text("DONE") } },
         title = { Text("Configuration", fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 SettingRow("TV Mode Adapter") {
                     Switch(checked = settings.isTVMode, onCheckedChange = { onUpdate(settings.copy(isTVMode = it)) })
+                }
+
+                Surface(
+                    onClick = onRename,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(0.5f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 10.dp).fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Person, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Player Name", fontSize = 13.sp)
+                            Text(
+                                if (playerName.isNotBlank()) playerName else "(not set)",
+                                fontSize = 11.sp,
+                                color = if (playerName.isNotBlank()) MaterialTheme.colorScheme.onSurface.copy(0.6f) else MaterialTheme.colorScheme.error.copy(0.6f)
+                            )
+                        }
+                        Icon(Icons.Default.Edit, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface.copy(0.4f))
+                    }
                 }
 
                 if (!settings.isTVMode) {

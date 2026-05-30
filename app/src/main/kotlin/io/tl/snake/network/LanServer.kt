@@ -128,9 +128,10 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                 colorIndex = colorIndex
             )
 
+            val isHost = synchronized(connectedPlayers) { connectedPlayers.size == 1 }
             synchronized(connectedPlayers) { connectedPlayers.add(player) }
             sendToClient(player, ServerMessage.Welcome(playerId, colorIndex))
-            broadcast(ServerMessage.PlayerJoined(PlayerInfo(playerId, join.name, clientAddress), colorIndex))
+            broadcast(ServerMessage.PlayerJoined(PlayerInfo(playerId, join.name, clientAddress, isHost = isHost), colorIndex))
             updateStatus()
 
             while (isRunning) {
@@ -247,7 +248,7 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
         synchronized(connectedPlayers) {
             _status.value = ServerStatus(
                 running = true,
-                players = connectedPlayers.map { PlayerInfo(it.id, it.name, it.address) },
+                players = connectedPlayers.mapIndexed { i, p -> PlayerInfo(p.id, p.name, p.address, isHost = i == 0) },
                 gameStarted = gameJob?.isActive == true
             )
         }

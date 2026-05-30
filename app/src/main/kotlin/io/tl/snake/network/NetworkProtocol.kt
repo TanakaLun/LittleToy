@@ -12,7 +12,8 @@ val networkJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 data class PlayerInfo(
     val id: String,
     val name: String,
-    val address: String = ""
+    val address: String = "",
+    val isHost: Boolean = false
 )
 
 @Serializable

@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.tl.snake.data.GameRepository
 import io.tl.snake.network.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -32,22 +33,33 @@ data class MultiplayerUiState(
 )
 
 class MultiplayerViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = GameRepository(application)
     private var server: LanServer? = null
     private var client: LanClient? = null
-    private val identity = PlayerIdentity.load(application)
+    private var identity = PlayerIdentity()
 
     var uiState by mutableStateOf(MultiplayerUiState())
         private set
 
     init {
-        uiState = uiState.copy(playerName = identity.name)
+        viewModelScope.launch {
+            identity = repository.loadPlayerIdentity()
+            uiState = uiState.copy(playerName = identity.playerName)
+        }
+    }
+
+    fun updatePlayerName(name: String) {
+        identity = identity.copy(playerName = name)
+        uiState = uiState.copy(playerName = name)
+        viewModelScope.launch { repository.savePlayerIdentity(identity) }
     }
 
     fun openMultiplayerDialog() {
         uiState = MultiplayerUiState(
             showDialog = true,
             screen = MultiplayerScreen.ROOM_BROWSER,
-            playerName = identity.name
+            playerName = identity.playerName,
+            playerId = identity.playerId
         )
         startAutoRefresh()
     }
@@ -147,7 +159,23 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
     fun closeDialog() {
         autoRefreshJob?.cancel()
         cleanup()
-        uiState = MultiplayerUiState(playerName = identity.name)
+        uiState = MultiplayerUiState(playerName = identity.playerName)
+    }
+
+    fun backToBrowser() {
+        autoRefreshJob?.cancel()
+        cleanup()
+        uiState = uiState.copy(
+            screen = MultiplayerScreen.ROOM_BROWSER,
+            isHost = false,
+            hostAddress = "",
+            gameStarted = false,
+            gameState = null,
+            lobbyPlayers = emptyList(),
+            winnerId = "",
+            winnerName = ""
+        )
+        startAutoRefresh()
     }
 
     fun backToLobby() {
