@@ -81,12 +81,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(settings.isTVMode, state.isPaused, state.isStarted, showSettings) {
-                    if (settings.isTVMode && !state.isPaused && state.isStarted && !showSettings) {
-                        focusRequester.requestFocus()
-                    }
-                }
-
                 Box(Modifier.fillMaxSize()) {
                     val mpScreen = mpVm.uiState.screen
                     val showMpFullScreen = !mpVm.uiState.showDialog &&
@@ -111,7 +105,7 @@ class MainActivity : ComponentActivity() {
                                 GameContent(state, settings, vm, focusRequester, onSwitchToMultiplayer = {
                                     if (mpVm.uiState.playerName.isBlank()) showPlayerNameDialog = true
                                     else mpVm.openMultiplayerDialog()
-                                })
+                                }, mpDialogVisible = mpVm.uiState.showDialog)
 
                                 if (showSettings) {
                                     SettingsDialog(
@@ -436,11 +430,22 @@ fun CountdownOverlay(count: Int) {
 }
 
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, focusRequester: FocusRequester, onSwitchToMultiplayer: () -> Unit) {
+fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, focusRequester: FocusRequester, onSwitchToMultiplayer: () -> Unit, mpDialogVisible: Boolean = false) {
+    val startButtonFocus = remember { FocusRequester() }
+    val mpButtonFocus = remember { FocusRequester() }
+
+    LaunchedEffect(settings.isTVMode, state.isStarted, state.isPaused, mpDialogVisible) {
+        if (settings.isTVMode) {
+            delay(100)
+            if (state.isStarted && !state.isPaused) focusRequester.requestFocus()
+            else if (!state.isStarted && !mpDialogVisible) startButtonFocus.requestFocus()
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Box(
             Modifier.weight(1f).fillMaxWidth().padding(16.dp)
-                .then(if (settings.isTVMode) {
+                .then(if (settings.isTVMode && state.isStarted) {
                     Modifier.focusRequester(focusRequester).focusable().onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown) {
                             when (event.nativeKeyEvent.keyCode) {
@@ -455,7 +460,7 @@ fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, fo
                     }
                 } else Modifier)
         ) {
-            GameCanvasArea(state, settings, vm, onSwitchToMultiplayer)
+            GameCanvasArea(state, settings, vm, onSwitchToMultiplayer, startButtonFocus)
         }
 
         if (!settings.isTVMode && settings.controlMode == ControlMode.BUTTONS) {
@@ -487,7 +492,7 @@ fun ControlButtonsRow(onDirChange: (Direction) -> Unit) {
 }
 
 @Composable
-fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel, onSwitchToMultiplayer: () -> Unit = {}) {
+fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel, onSwitchToMultiplayer: () -> Unit = {}, startButtonFocus: FocusRequester? = null) {
     val colorScheme = MaterialTheme.colorScheme
     val infiniteTransition = rememberInfiniteTransition("game_anim")
     val decayAlpha by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(200), RepeatMode.Reverse), "flash")
@@ -535,7 +540,11 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel,
                         ) {
                             Button(
                                 onClick = { vm.startGame() },
-                                modifier = Modifier.height(52.dp).width(180.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
+                                modifier = Modifier.height(52.dp).width(180.dp).then(
+                                    if (settings.isTVMode && startButtonFocus != null) Modifier.focusRequester(startButtonFocus).focusable()
+                                    else if (settings.isTVMode) Modifier.focusable()
+                                    else Modifier
+                                ),
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
                                 Icon(Icons.Default.PlayArrow, null, Modifier.size(20.dp))
@@ -544,7 +553,11 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel,
                             }
                             Button(
                                 onClick = onSwitchToMultiplayer,
-                                modifier = Modifier.height(52.dp).width(180.dp).then(if (settings.isTVMode) Modifier.focusable() else Modifier),
+                                modifier = Modifier.height(52.dp).width(180.dp).then(
+                                    if (settings.isTVMode && mpButtonFocus != null) Modifier.focusRequester(mpButtonFocus).focusable()
+                                    else if (settings.isTVMode) Modifier.focusable()
+                                    else Modifier
+                                ),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.tertiary,
                                     contentColor = MaterialTheme.colorScheme.onTertiary
@@ -989,8 +1002,8 @@ fun ConfettiEffect() {
 fun GameTopBar(state: SnakeState, settings: GameSettings, onTogglePause: () -> Unit, onOpenSettings: () -> Unit, onResetHS: () -> Unit) {
     Box(Modifier.fillMaxWidth().statusBarsPadding().height(70.dp)) {
         Column(Modifier.align(Alignment.CenterStart).padding(start = 16.dp)) {
-            ScoreChip(Icons.Default.EmojiEvents, "HI", state.highScore, MaterialTheme.colorScheme.outline, onLongClick = onResetHS)
-            ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary)
+            ScoreChip(Icons.Default.EmojiEvents, "HI", state.highScore, MaterialTheme.colorScheme.outline, isTVMode = settings.isTVMode, onLongClick = onResetHS)
+            ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary, isTVMode = settings.isTVMode)
         }
         Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center))
 
@@ -1007,8 +1020,10 @@ fun GameTopBar(state: SnakeState, settings: GameSettings, onTogglePause: () -> U
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ScoreChip(icon: ImageVector, label: String, value: Int, color: Color, onLongClick: (() -> Unit)? = null) {
-    Surface(color = color.copy(alpha = 0.1f), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(vertical = 1.dp).combinedClickable(onClick = {}, onLongClick = onLongClick)) {
+fun ScoreChip(icon: ImageVector, label: String, value: Int, color: Color, isTVMode: Boolean = false, onLongClick: (() -> Unit)? = null) {
+    Surface(color = color.copy(alpha = 0.1f), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(vertical = 1.dp).clip(RoundedCornerShape(16.dp)).then(
+        if (isTVMode) Modifier else Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick)
+    )) {
         Row(Modifier.padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, Modifier.size(10.dp), tint = color); Spacer(Modifier.width(4.dp))
             Text("$label: $value", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = color)

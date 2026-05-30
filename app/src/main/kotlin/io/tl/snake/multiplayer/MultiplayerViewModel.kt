@@ -104,7 +104,7 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
                     gameStarted = status.gameStarted
                 )
                 if (status.gameStarted) {
-                    uiState = uiState.copy(screen = MultiplayerScreen.GAME)
+                    uiState = uiState.copy(screen = MultiplayerScreen.GAME, showDialog = false)
                 }
             }
         }
@@ -121,6 +121,7 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
                     val (winnerId, winnerName) = result
                     uiState = uiState.copy(
                         screen = MultiplayerScreen.VICTORY,
+                        showDialog = false,
                         winnerId = winnerId,
                         winnerName = winnerName
                     )

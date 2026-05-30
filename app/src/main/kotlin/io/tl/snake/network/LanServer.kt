@@ -93,7 +93,7 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                         val response = "$DISCOVERY_MAGIC|$hostName|${connectedPlayers.size}".toByteArray()
                         val responsePacket = DatagramPacket(
                             response, response.size,
-                            packet.address, DISCOVERY_PORT
+                            packet.address, packet.port
                         )
                         discoverySocket!!.send(responsePacket)
                     }
