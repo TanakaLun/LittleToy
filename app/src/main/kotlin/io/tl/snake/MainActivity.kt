@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.*
@@ -479,12 +480,13 @@ fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, fo
     val startButtonFocus = remember { FocusRequester() }
     val mpButtonFocus = remember { FocusRequester() }
 
-    LaunchedEffect(settings.isTVMode) {
+    LaunchedEffect(settings.isTVMode, state.isStarted, state.isPaused, mpDialogVisible) {
         if (!settings.isTVMode) return@LaunchedEffect
-        snapshotFlow { Triple(state.isStarted, state.isPaused, mpDialogVisible) }.collect { (started, paused, dialog) ->
-            kotlinx.coroutines.delay(50)
-            if (started && !paused) focusRequester.requestFocus()
-            else if (!started && !dialog) startButtonFocus.requestFocus()
+        kotlinx.coroutines.delay(100)
+        if (state.isStarted && !state.isPaused) {
+            focusRequester.requestFocus()
+        } else if (!state.isStarted && !mpDialogVisible) {
+            startButtonFocus.requestFocus()
         }
     }
 
@@ -579,13 +581,14 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel,
                 }
 
                 if (!state.isStarted) {
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.6f)), contentAlignment = Alignment.Center) {
+                    val overlayMod = if (settings.isTVMode) Modifier.focusProperties { canFocus = false } else Modifier
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.6f)).then(overlayMod), contentAlignment = Alignment.Center) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Button(
-                                onClick = { vm.startGame() },
+                                onClick = { vm.startGame(); if (settings.isTVMode) focusRequester.requestFocus() },
                                 modifier = Modifier.height(52.dp).width(180.dp).then(
                                     if (settings.isTVMode && startButtonFocus != null) Modifier.focusRequester(startButtonFocus).focusable()
                                     else if (settings.isTVMode) Modifier.focusable()
@@ -690,9 +693,11 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMultiplayerGame
         }
     }
 
+    val playerColors = state.players.map { playerColorFromScheme(it.colorIndex, colorScheme) }
+
     state.players.forEach { player ->
         if (!player.isAlive || player.snake.isEmpty()) return@forEach
-        val color = playerColor(player.colorIndex)
+        val color = playerColors[state.players.indexOf(player)]
 
         player.snake.forEachIndexed { i, seg ->
             val sx = seg.x * cellSizePx + viewOffX
@@ -726,13 +731,14 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMultiplayerGame
     }
 }
 
-private fun playerColor(index: Int): Color {
+private fun playerColorFromScheme(index: Int, scheme: androidx.compose.material3.ColorScheme): Color {
     val colors = listOf(
-        0xFF4CAF50, 0xFF2196F3, 0xFFFF9800, 0xFFE91E63,
-        0xFF9C27B0, 0xFF00BCD4, 0xFFFF5722, 0xFF8BC34A,
-        0xFF607D8B, 0xFF795548, 0xFFCDDC39, 0xFF03A9F4
+        scheme.primary, scheme.secondary, scheme.tertiary,
+        scheme.primary.copy(alpha = 0.6f), scheme.secondary.copy(alpha = 0.6f), scheme.tertiary.copy(alpha = 0.6f),
+        scheme.primary.copy(alpha = 0.4f), scheme.secondary.copy(alpha = 0.4f), scheme.tertiary.copy(alpha = 0.4f),
+        scheme.onSurface.copy(alpha = 0.8f), scheme.outline, scheme.error.copy(alpha = 0.7f)
     )
-    return Color(colors[index % colors.size])
+    return colors[index % colors.size]
 }
 
 @Composable
@@ -784,12 +790,35 @@ fun MultiplayerLeaderboardOverlay(state: SerializedGameState) {
 }
 
 @Composable
+fun MultiplayerItemsOverlay(items: Map<String, Int>) {
+    if (items.isEmpty()) return
+    val sorted = items.filter { it.value > 0 }.toList().take(5)
+    if (sorted.isEmpty()) return
+    Surface(color = Color.Black.copy(0.55f), shape = RoundedCornerShape(12.dp)) {
+        Column(Modifier.padding(8.dp)) {
+            Text("ITEMS", fontWeight = FontWeight.Black, fontSize = 10.sp, color = Color.White.copy(0.7f))
+            Spacer(Modifier.height(4.dp))
+            sorted.forEach { (typeName, count) ->
+                val type = try { ItemType.valueOf(typeName) } catch (_: Exception) { null }
+                if (type != null) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(type.icon, null, Modifier.size(12.dp), tint = Color(type.colorHex))
+                        Spacer(Modifier.width(6.dp))
+                        Text("${type.label} x$count", fontSize = 10.sp, color = Color.White, modifier = Modifier.weight(1f), maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun MultiplayerGameView(mpVm: MultiplayerViewModel, settings: GameSettings = GameSettings()) {
     val state = mpVm.uiState.gameState ?: return
     val focusRequester = remember { FocusRequester() }
     val colorScheme = MaterialTheme.colorScheme
 
-    Column(Modifier.fillMaxSize().background(Color(0xFF0F0F23))) {
+    Column(Modifier.fillMaxSize().background(colorScheme.background)) {
         Box(Modifier.weight(1f).fillMaxWidth().padding(8.dp)) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val density = LocalContext.current.resources.displayMetrics.density
@@ -877,6 +906,13 @@ fun MultiplayerGameView(mpVm: MultiplayerViewModel, settings: GameSettings = Gam
     if (stateData != null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
             MultiplayerLeaderboardOverlay(stateData)
+            val myId = mpVm.uiState.playerId
+            val myPlayer = stateData.players.find { it.id == myId }
+            if (myPlayer != null && myPlayer.itemsCollected.isNotEmpty()) {
+                Box(Modifier.padding(top = 170.dp).width(140.dp)) {
+                    MultiplayerItemsOverlay(myPlayer.itemsCollected)
+                }
+            }
         }
     }
 }
@@ -1077,12 +1113,14 @@ fun ConfettiEffect() {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GameTopBar(state: SnakeState, settings: GameSettings, onTogglePause: () -> Unit, onOpenSettings: () -> Unit, onResetHS: () -> Unit) {
-    Box(Modifier.fillMaxWidth().statusBarsPadding().height(70.dp)) {
+    val isPlaying = state.isStarted && !state.isGameOver
+    val topBarMod = if (settings.isTVMode && isPlaying) Modifier.focusProperties { canFocus = false } else Modifier
+    Box(Modifier.fillMaxWidth().statusBarsPadding().height(70.dp).then(topBarMod)) {
         Column(Modifier.align(Alignment.CenterStart).padding(start = 16.dp)) {
-            ScoreChip(Icons.Default.EmojiEvents, "HI", state.highScore, MaterialTheme.colorScheme.outline, isTVMode = settings.isTVMode, onLongClick = onResetHS)
-            ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary, isTVMode = settings.isTVMode)
+            ScoreChip(Icons.Default.EmojiEvents, "HI", state.highScore, MaterialTheme.colorScheme.outline, isTVMode = settings.isTVMode, isPlaying = isPlaying, onLongClick = onResetHS)
+            ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary, isTVMode = settings.isTVMode, isPlaying = isPlaying)
         }
-        Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center))
+        Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center).padding(top = 10.dp))
 
         if (!settings.isTVMode) {
             Row(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
@@ -1097,10 +1135,12 @@ fun GameTopBar(state: SnakeState, settings: GameSettings, onTogglePause: () -> U
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ScoreChip(icon: ImageVector, label: String, value: Int, color: Color, isTVMode: Boolean = false, onLongClick: (() -> Unit)? = null) {
-    Surface(color = color.copy(alpha = 0.1f), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(vertical = 1.dp).clip(RoundedCornerShape(16.dp)).then(
-        if (isTVMode) Modifier else Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick)
-    )) {
+fun ScoreChip(icon: ImageVector, label: String, value: Int, color: Color, isTVMode: Boolean = false, isPlaying: Boolean = false, onLongClick: (() -> Unit)? = null) {
+    val chipModifier = when {
+        isTVMode || isPlaying -> Modifier.focusProperties { canFocus = false }
+        else -> Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick)
+    }
+    Surface(color = color.copy(alpha = 0.1f), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(vertical = 1.dp).clip(RoundedCornerShape(16.dp)).then(chipModifier)) {
         Row(Modifier.padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, Modifier.size(10.dp), tint = color); Spacer(Modifier.width(4.dp))
             Text("$label: $value", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = color)

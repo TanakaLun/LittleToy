@@ -41,7 +41,8 @@ data class SerializedPlayerState(
     val shieldCount: Int,
     val ghostTimeRemaining: Long,
     val invincibleTimeRemaining: Long,
-    val colorIndex: Int
+    val colorIndex: Int,
+    val itemsCollected: Map<String, Int> = emptyMap()
 )
 
 @Serializable

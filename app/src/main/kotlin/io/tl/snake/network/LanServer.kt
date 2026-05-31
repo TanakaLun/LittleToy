@@ -214,7 +214,8 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                     shieldCount = p.shieldCount,
                     ghostTimeRemaining = p.ghostTimeRemaining,
                     invincibleTimeRemaining = p.invincibleTimeRemaining,
-                    colorIndex = gs.players.indexOf(p)
+                    colorIndex = gs.players.indexOf(p),
+                    itemsCollected = p.itemsCollected
                 )
             },
             objects = gs.objects.map { SerializedGameObject(it.pos.first, it.pos.second, it.type.name, it.timeLeft) },
