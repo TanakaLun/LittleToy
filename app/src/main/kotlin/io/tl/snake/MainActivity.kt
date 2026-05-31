@@ -1121,7 +1121,7 @@ fun GameTopBar(state: SnakeState, settings: GameSettings, onTogglePause: () -> U
             ScoreChip(Icons.Default.EmojiEvents, "HI", state.highScore, MaterialTheme.colorScheme.outline, isTVMode = settings.isTVMode, isPlaying = isPlaying, onLongClick = onResetHS)
             ScoreChip(Icons.Default.MilitaryTech, "SC", state.score, MaterialTheme.colorScheme.primary, isTVMode = settings.isTVMode, isPlaying = isPlaying)
         }
-        Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center).padding(top = 10.dp))
+        Text("SNAKE EVO", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.align(Alignment.Center).padding(top = 16.dp))
 
         if (!settings.isTVMode) {
             Row(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {

@@ -188,6 +188,12 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
         )
         startAutoRefresh()
     }
+    
+    fun onAppBackground() {
+        if (uiState.screen == MultiplayerScreen.GAME) {
+          backToBrowser()
+        }
+    }
 
     fun backToLobby() {
         uiState = uiState.copy(
