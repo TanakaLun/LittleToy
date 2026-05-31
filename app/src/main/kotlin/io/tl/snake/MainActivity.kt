@@ -663,7 +663,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMultiplayerGame
     viewOffY: Float,
     viewW: Float,
     viewH: Float,
-    colorScheme: androidx.compose.material3.ColorScheme = androidx.compose.material3.MaterialTheme.colorScheme
+    colorScheme: androidx.compose.material3.ColorScheme
 ) {
     val gridColor = colorScheme.onSurface.copy(0.05f)
     val startX = (-viewOffX % cellSizePx).let { if (it < 0) it + cellSizePx else it }
