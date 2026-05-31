@@ -199,6 +199,18 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
         )
     }
 
+    fun leaveMultiplayerGame() {
+        if (uiState.screen == MultiplayerScreen.GAME) {
+            backToLobby()
+        }
+    }
+
+    fun onAppBackground() {
+        if (uiState.screen == MultiplayerScreen.GAME) {
+            backToLobby()
+        }
+    }
+
     private fun cleanup() {
         client?.disconnect()
         server?.stop()

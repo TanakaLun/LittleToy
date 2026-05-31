@@ -3,6 +3,7 @@ package io.tl.snake.network
 import io.tl.snake.logic.Direction
 import io.tl.snake.logic.GameConfig
 import io.tl.snake.logic.GameObject
+import io.tl.snake.logic.GameSettings
 import io.tl.snake.logic.ItemType
 import kotlin.random.Random
 
@@ -78,15 +79,11 @@ data class MultiplayerGameState(
     }
 }
 
-fun multiplayerGameTick(state: MultiplayerGameState): MultiplayerGameState {
+fun multiplayerGameTick(state: MultiplayerGameState, settings: GameSettings? = null): MultiplayerGameState {
     if (state.isGameOver) return state
 
-    val allSnakePositions = state.players
-        .filter { it.isAlive }
-        .flatMap { p -> p.snake.map { pos -> p.id to pos } }
-        .toMap()
-
     val currentSpeed = GameConfig.BASE_SPEED
+    val maxObjs = GameConfig.dynamicMaxObjects(state.gridWidth, state.gridHeight)
 
     val updatedPlayers = state.players.map { player ->
         if (!player.isAlive || player.disconnected) return@map player
@@ -113,19 +110,17 @@ fun multiplayerGameTick(state: MultiplayerGameState): MultiplayerGameState {
         var newShieldCount = player.shieldCount
         var newGhostTime = (player.ghostTimeRemaining - currentSpeed).coerceAtLeast(0L)
         var newInvincibleTime = (player.invincibleTimeRemaining - currentSpeed).coerceAtLeast(0L)
-        var alive = true
 
         val headCollisionPlayers = state.players.filter { other ->
             other.id != player.id && other.isAlive && other.snake.first() == newHead
         }
 
         if (headCollisionPlayers.isNotEmpty()) {
-            newScore = (newScore / 2).coerceAtLeast(0)
-            newSnake.removeAt(newSnake.size - 1)
+            newScore = ((newScore + 1) / 2).coerceAtLeast(0)
             return@map player.copy(
-                snake = newSnake,
+                snake = emptyList(),
                 score = newScore,
-                isAlive = true,
+                isAlive = false,
                 shieldCount = newShieldCount,
                 ghostTimeRemaining = newGhostTime,
                 invincibleTimeRemaining = newInvincibleTime
@@ -138,15 +133,22 @@ fun multiplayerGameTick(state: MultiplayerGameState): MultiplayerGameState {
         }
 
         if (hitBody.isNotEmpty()) {
-            newScore = (newScore / 2).coerceAtLeast(0)
-            alive = true
+            newScore = ((newScore + 1) / 2).coerceAtLeast(0)
+            return@map player.copy(
+                snake = emptyList(),
+                score = newScore,
+                isAlive = false,
+                shieldCount = newShieldCount,
+                ghostTimeRemaining = newGhostTime,
+                invincibleTimeRemaining = newInvincibleTime
+            )
         }
 
         newSnake.removeAt(newSnake.size - 1)
         return@map player.copy(
             snake = newSnake,
             score = newScore,
-            isAlive = alive,
+            isAlive = true,
             shieldCount = newShieldCount,
             ghostTimeRemaining = newGhostTime,
             invincibleTimeRemaining = newInvincibleTime
@@ -167,11 +169,15 @@ fun multiplayerGameTick(state: MultiplayerGameState): MultiplayerGameState {
         if (hitObj != null) {
             updatedObjects.removeIf { it.pos == head }
             val newScore = (player.score + hitObj.type.score).coerceAtLeast(0)
-            updatedPlayers[i] = player.copy(score = newScore)
+            var newSnake = player.snake.toMutableList()
+            if (hitObj.type.score <= 0) {
+                newSnake.removeAt(newSnake.size - 1)
+            }
+            updatedPlayers[i] = player.copy(snake = newSnake, score = newScore)
         }
     }
 
-    if (updatedObjects.size < 15 && Random.nextFloat() < 0.15f) {
+    if (updatedObjects.size < maxObjs && Random.nextFloat() < 0.15f) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
         val allOccupied = updatedPlayers.filter { it.isAlive }.flatMap { it.snake }.toSet() +
             updatedObjects.map { it.pos }.toSet()
@@ -189,7 +195,7 @@ fun multiplayerGameTick(state: MultiplayerGameState): MultiplayerGameState {
 
     val alivePlayers = updatedPlayers.filter { it.isAlive }
     val isGameOver = alivePlayers.size <= 1
-    val winner = if (isGameOver) alivePlayers.firstOrNull()?.id ?: "" else ""
+    val winner = if (isGameOver) updatedPlayers.maxByOrNull { it.score }?.id ?: "" else ""
 
     return state.copy(
         players = updatedPlayers,

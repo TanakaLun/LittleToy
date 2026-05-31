@@ -41,7 +41,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             while (true) {
                 if (state.isStarted && !state.isPaused && !state.isGameOver && countdown == 0) {
-                    val speed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
+                    val speed = (GameConfig.speedForDifficulty(state.score, settings.difficulty) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
                     delay(speed)
                     state = gameTick(state, settings)
                     if (state.isGameOver) checkHighScore()
@@ -102,6 +102,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun updateSettings(newSettings: GameSettings) {
         settings = newSettings
         viewModelScope.launch { saveData() }
+    }
+
+    fun onAppBackground() {
+        if (state.isStarted && !state.isPaused && !state.isGameOver) {
+            state = state.copy(isPaused = true)
+        }
+    }
+
+    fun endGame() {
+        state = state.copy(isGameOver = true)
     }
 
     fun resetHighScore() {

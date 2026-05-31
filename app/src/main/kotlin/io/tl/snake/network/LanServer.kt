@@ -128,8 +128,8 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                 colorIndex = colorIndex
             )
 
-            val isHost = synchronized(connectedPlayers) { connectedPlayers.size == 1 }
             synchronized(connectedPlayers) { connectedPlayers.add(player) }
+            val isHost = synchronized(connectedPlayers) { connectedPlayers.size == 1 }
             sendToClient(player, ServerMessage.Welcome(playerId, colorIndex))
             broadcast(ServerMessage.PlayerJoined(PlayerInfo(playerId, join.name, clientAddress, isHost = isHost), colorIndex))
             updateStatus()

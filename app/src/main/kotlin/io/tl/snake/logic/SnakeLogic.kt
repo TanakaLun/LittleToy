@@ -2,12 +2,32 @@ package io.tl.snake.logic
 
 import kotlin.random.Random
 
+enum class Difficulty(val label: String, val speedFactor: Float) {
+    EASY("简单", 0.3f),
+    RELAXED("休闲", 0.6f),
+    NORMAL("普通", 1.0f),
+    ADVANCED("进阶", 1.5f),
+    CHALLENGE("挑战", 2.0f),
+    HARD("困难", 3.0f),
+    EXTREME("极限", 5.0f),
+    INSANE("反人类", 8.0f)
+}
+
 object GameConfig {
     const val BASE_SPEED = 150L
     const val MIN_SPEED = 50L
     const val GHOST_DURATION_MS = 15000L
     const val INVINCIBLE_DURATION_MS = 15000L
     const val ITEM_DECAY_MS = 15000L
+
+    fun dynamicMaxObjects(gridW: Int, gridH: Int): Int {
+        return maxOf(1, (gridW * gridH) / 5).coerceAtMost(50)
+    }
+
+    fun speedForDifficulty(score: Int, difficulty: Difficulty): Long {
+        val reduction = (score / 100 * 5 * difficulty.speedFactor).toLong()
+        return (BASE_SPEED - reduction).coerceAtLeast(MIN_SPEED)
+    }
 }
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
@@ -38,7 +58,8 @@ data class GameSettings(
     val enableItemDecay: Boolean = true,
     val targetCellSize: Float = 22f,
     val controlMode: ControlMode = ControlMode.SWIPE,
-    val isTVMode: Boolean = false, // 增加 TV 模式标志
+    val isTVMode: Boolean = false,
+    val difficulty: Difficulty = Difficulty.NORMAL,
     val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
 )
 
@@ -66,7 +87,7 @@ enum class GameEvent { EAT_GOOD, EAT_BAD, HIT_WALL, SHIELD_BREAK }
 fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     if (state.isGameOver || state.isPaused || !state.isStarted) return state
     
-    val currentSpeed = (GameConfig.BASE_SPEED - (state.score / 100 * 5) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
+    val currentSpeed = (GameConfig.speedForDifficulty(state.score, settings.difficulty) + state.speedModifier).coerceAtLeast(GameConfig.MIN_SPEED)
     val head = state.snake.first()
     var nX = when (state.direction) { 
         Direction.LEFT -> head.first - 1; Direction.RIGHT -> head.first + 1; else -> head.first 
@@ -128,7 +149,8 @@ fun gameTick(state: SnakeState, settings: GameSettings): SnakeState {
     }
 
     val allowedTypes = ItemType.entries.filter { settings.enabledItems[it] == true }
-    if (remainingObjects.size < settings.maxObjects && Random.nextFloat() < 0.12f && allowedTypes.isNotEmpty()) {
+    val maxObjs = GameConfig.dynamicMaxObjects(state.gridWidth, state.gridHeight)
+    if (remainingObjects.size < maxObjs && Random.nextFloat() < 0.12f && allowedTypes.isNotEmpty()) {
         val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
         if (!nS.contains(newPos) && remainingObjects.none { it.pos == newPos }) {
             val totalWeight = allowedTypes.sumOf { it.weight.toDouble() }

@@ -2,6 +2,7 @@ package io.tl.snake.data
 
 import android.content.Context
 import io.tl.snake.logic.ControlMode
+import io.tl.snake.logic.Difficulty
 import io.tl.snake.logic.GameSettings
 import io.tl.snake.logic.ItemType
 import io.tl.snake.network.PlayerIdentity
@@ -50,6 +51,7 @@ class GameRepository(private val context: Context) {
             isGhostPermanent = json.optBoolean("isGhostPermanent", false),
             controlMode = ControlMode.valueOf(json.optString("controlMode", "SWIPE")),
             isTVMode = json.optBoolean("isTVMode", false),
+            difficulty = try { Difficulty.valueOf(json.optString("difficulty", "NORMAL")) } catch (_: Exception) { Difficulty.NORMAL },
             enabledItems = itemMap
         )
     }
@@ -66,6 +68,7 @@ class GameRepository(private val context: Context) {
             put("isGhostPermanent", settings.isGhostPermanent)
             put("controlMode", settings.controlMode.name)
             put("isTVMode", settings.isTVMode)
+            put("difficulty", settings.difficulty.name)
             put("enabledItems", JSONObject().apply {
                 settings.enabledItems.forEach { (k, v) -> put(k.name, v) }
             })
