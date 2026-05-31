@@ -199,15 +199,23 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
         )
     }
 
-    fun leaveMultiplayerGame() {
-        if (uiState.screen == MultiplayerScreen.GAME) {
-            backToLobby()
+    fun requestRestartGame() {
+        if (uiState.isHost) {
+            server?.restartGame()
+        } else {
+            client?.requestStartGame()
         }
+        uiState = uiState.copy(
+            gameStarted = false,
+            gameState = null,
+            winnerId = "",
+            winnerName = ""
+        )
     }
 
-    fun onAppBackground() {
+    fun leaveMultiplayerGame() {
         if (uiState.screen == MultiplayerScreen.GAME) {
-            backToLobby()
+            backToBrowser()
         }
     }
 

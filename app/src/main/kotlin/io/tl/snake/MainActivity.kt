@@ -120,6 +120,7 @@ class MainActivity : ComponentActivity() {
                                 winnerId = mpVm.uiState.winnerId,
                                 winnerName = mpVm.uiState.winnerName,
                                 myId = mpVm.uiState.playerId,
+                                onRestart = { mpVm.requestRestartGame() },
                                 onBackToLobby = { mpVm.backToLobby() },
                                 onBackToMenu = { mpVm.closeDialog() }
                             )
@@ -414,7 +415,7 @@ fun MultiplayerLobbyDialog(mpVm: MultiplayerViewModel) {
 }
 
 @Composable
-fun MultiplayerVictoryScreen(winnerId: String, winnerName: String, myId: String, onBackToLobby: () -> Unit, onBackToMenu: () -> Unit) {
+fun MultiplayerVictoryScreen(winnerId: String, winnerName: String, myId: String, onRestart: () -> Unit, onBackToLobby: () -> Unit, onBackToMenu: () -> Unit) {
     val isWinner = winnerId == myId
     Box(Modifier.fillMaxSize().background(Color.Black.copy(0.7f)), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -435,7 +436,7 @@ fun MultiplayerVictoryScreen(winnerId: String, winnerName: String, myId: String,
                 color = Color.White.copy(0.6f), fontSize = 16.sp
             )
             Spacer(Modifier.height(40.dp))
-            Button(onClick = onBackToLobby, modifier = Modifier.width(200.dp)) {
+            Button(onClick = onRestart, modifier = Modifier.width(200.dp)) {
                 Icon(Icons.Default.Replay, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("PLAY AGAIN", fontWeight = FontWeight.Bold)

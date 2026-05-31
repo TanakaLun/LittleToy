@@ -86,89 +86,67 @@ fun multiplayerGameTick(state: MultiplayerGameState, settings: GameSettings? = n
     val currentSpeed = GameConfig.BASE_SPEED
     val maxObjs = GameConfig.dynamicMaxObjects(state.gridWidth, state.gridHeight)
 
+    val newHeads = state.players.associate { player ->
+        if (!player.isAlive || player.disconnected) return@associate player.id to null
+        val head = player.snake.first()
+        var nx = when (player.direction) {
+            Direction.LEFT -> head.first - 1; Direction.RIGHT -> head.first + 1; else -> head.first
+        }
+        var ny = when (player.direction) {
+            Direction.UP -> head.second - 1; Direction.DOWN -> head.second + 1; else -> head.second
+        }
+        nx = (nx + state.gridWidth) % state.gridWidth
+        ny = (ny + state.gridHeight) % state.gridHeight
+        player.id to (nx to ny)
+    }
+
+    val newHeadPositions = newHeads.filterValues { it != null }.mapValues { it.value!! }
+
+    val headToHead = newHeadPositions.entries.groupBy({ it.value }, { it.key }).filter { it.value.size > 1 }
+
     val updatedPlayers = state.players.map { player ->
         if (!player.isAlive || player.disconnected) return@map player
 
+        val newHead = newHeadPositions[player.id] ?: return@map player
         val isInvincible = player.invincibleTimeRemaining > 0
         val isGhostActive = player.ghostTimeRemaining > 0 || isInvincible
 
-        val head = player.snake.first()
-        var nX = when (player.direction) {
-            Direction.LEFT -> head.first - 1
-            Direction.RIGHT -> head.first + 1
-            else -> head.first
-        }
-        var nY = when (player.direction) {
-            Direction.UP -> head.second - 1
-            Direction.DOWN -> head.second + 1
-            else -> head.second
-        }
-
-        nX = (nX + state.gridWidth) % state.gridWidth
-        nY = (nY + state.gridHeight) % state.gridHeight
-
-        val newHead = nX to nY
-
-        var newSnake = player.snake.toMutableList().apply { add(0, newHead) }
         var newScore = player.score
         var newShieldCount = player.shieldCount
         var newGhostTime = (player.ghostTimeRemaining - currentSpeed).coerceAtLeast(0L)
         var newInvincibleTime = (player.invincibleTimeRemaining - currentSpeed).coerceAtLeast(0L)
 
-        val headCollisionPlayers = state.players.filter { other ->
+        val inHeadToHead = headToHead.containsKey(newHead)
+        val hitOtherHead = !inHeadToHead && state.players.any { other ->
             other.id != player.id && other.isAlive && other.snake.first() == newHead
         }
+        val hitBody = !inHeadToHead && !hitOtherHead && state.players.any { other ->
+            other.id != player.id && other.isAlive && other.snake.drop(1).any { it == newHead }
+        }
+        val hitSelf = !inHeadToHead && !hitOtherHead && !hitBody &&
+            player.snake.drop(1).any { it == newHead }
 
-        if (headCollisionPlayers.isNotEmpty() && !isInvincible) {
+        val collision = inHeadToHead || hitOtherHead || (hitBody && !isGhostActive) || (hitSelf && !isGhostActive)
+
+        if (collision && !isInvincible) {
             if (newShieldCount > 0) {
                 newShieldCount--
                 newInvincibleTime = GameConfig.INVINCIBLE_DURATION_MS
             } else {
                 newScore = ((newScore + 1) / 2).coerceAtLeast(0)
                 return@map player.copy(
-                    snake = emptyList(),
-                    score = newScore,
-                    isAlive = false,
-                    shieldCount = newShieldCount,
-                    ghostTimeRemaining = newGhostTime,
+                    snake = emptyList(), score = newScore, isAlive = false,
+                    shieldCount = newShieldCount, ghostTimeRemaining = newGhostTime,
                     invincibleTimeRemaining = newInvincibleTime,
                     itemsCollected = player.itemsCollected
                 )
             }
         }
 
-        if (!headCollisionPlayers.isNotEmpty() || isInvincible) {
-            val hitBody = state.players.filter { other ->
-                other.id != player.id && other.isAlive &&
-                    other.snake.drop(1).any { it == newHead }
-            }
-
-            if (hitBody.isNotEmpty() && !isGhostActive) {
-                if (newShieldCount > 0) {
-                    newShieldCount--
-                    newInvincibleTime = GameConfig.INVINCIBLE_DURATION_MS
-                } else {
-                    newScore = ((newScore + 1) / 2).coerceAtLeast(0)
-                    return@map player.copy(
-                        snake = emptyList(),
-                        score = newScore,
-                        isAlive = false,
-                        shieldCount = newShieldCount,
-                        ghostTimeRemaining = newGhostTime,
-                        invincibleTimeRemaining = newInvincibleTime,
-                        itemsCollected = player.itemsCollected
-                    )
-                }
-            }
-        }
-
-        newSnake.removeAt(newSnake.size - 1)
+        var newSnake = player.snake.toMutableList().apply { add(0, newHead) }
         return@map player.copy(
-            snake = newSnake,
-            score = newScore,
-            isAlive = true,
-            shieldCount = newShieldCount,
-            ghostTimeRemaining = newGhostTime,
+            snake = newSnake, score = newScore, isAlive = true,
+            shieldCount = newShieldCount, ghostTimeRemaining = newGhostTime,
             invincibleTimeRemaining = newInvincibleTime,
             itemsCollected = player.itemsCollected
         )
@@ -178,6 +156,8 @@ fun multiplayerGameTick(state: MultiplayerGameState, settings: GameSettings? = n
     updatedObjects = updatedObjects.map { it.copy(timeLeft = it.timeLeft - currentSpeed) }
         .filter { it.timeLeft > 0 }
         .toMutableList()
+
+    val ateFood = mutableSetOf<Int>()
 
     for (i in updatedPlayers.indices) {
         val player = updatedPlayers[i]
@@ -204,12 +184,23 @@ fun multiplayerGameTick(state: MultiplayerGameState, settings: GameSettings? = n
                 ItemType.GHOST -> if (newGhost <= 0) newGhost = GameConfig.GHOST_DURATION_MS
                 else -> {}
             }
+            ateFood.add(i)
             updatedPlayers[i] = player.copy(
                 snake = newSnake, score = newScore,
                 shieldCount = newShield, ghostTimeRemaining = newGhost,
                 invincibleTimeRemaining = newInvincible,
                 itemsCollected = newItems
             )
+        }
+    }
+
+    for (i in updatedPlayers.indices) {
+        val player = updatedPlayers[i]
+        if (!player.isAlive || player.disconnected) continue
+        if (i !in ateFood) {
+            val newSnake = player.snake.toMutableList()
+            newSnake.removeAt(newSnake.size - 1)
+            updatedPlayers[i] = player.copy(snake = newSnake)
         }
     }
 

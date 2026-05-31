@@ -146,8 +146,8 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                             }
                         }
                         "StartGame" -> {
-                            if (!gameState.isGameOver) {
-                                scope.launch { startGame() }
+                            if (gameState.isGameOver || gameJob?.isActive != true) {
+                                restartGame()
                             }
                         }
                         "Leave" -> break
@@ -253,6 +253,11 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                 gameStarted = gameJob?.isActive == true
             )
         }
+    }
+
+    fun restartGame() {
+        gameJob?.cancel()
+        scope.launch { startGame() }
     }
 
     fun stop() {
