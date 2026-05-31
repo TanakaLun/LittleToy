@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
                 var showSettings by remember { mutableStateOf(false) }
                 var showPlayerNameDialog by remember { mutableStateOf(false) }
                 val vibrator = LocalContext.current.getSystemService(Vibrator::class.java)!!
-                val focusRequester = remember { FocusRequester() }
+                val gameFocus = remember { FocusRequester() }
 
                 val lifecycleOwner = LocalLifecycleOwner.current
                 DisposableEffect(lifecycleOwner) {
@@ -135,7 +135,7 @@ class MainActivity : ComponentActivity() {
                             topBar = { GameTopBar(state, settings, { vm.togglePause() }, { vm.setPaused(true); showSettings = true }, { vm.resetHighScore() }) }
                         ) { p ->
                             Box(Modifier.padding(p).fillMaxSize()) {
-                                GameContent(state, settings, vm, focusRequester, onSwitchToMultiplayer = {
+                                GameContent(state, settings, vm, gameFocus, onSwitchToMultiplayer = {
                                     if (mpVm.uiState.playerName.isBlank()) showPlayerNameDialog = true
                                     else mpVm.openMultiplayerDialog()
                                 }, mpDialogVisible = mpVm.uiState.showDialog)
@@ -476,7 +476,7 @@ fun CountdownOverlay(count: Int) {
 }
 
 @Composable
-fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, focusRequester: FocusRequester, onSwitchToMultiplayer: () -> Unit, mpDialogVisible: Boolean = false) {
+fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, gameFocus: FocusRequester, onSwitchToMultiplayer: () -> Unit, mpDialogVisible: Boolean = false) {
     val startButtonFocus = remember { FocusRequester() }
     val mpButtonFocus = remember { FocusRequester() }
 
@@ -484,7 +484,7 @@ fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, fo
         if (!settings.isTVMode) return@LaunchedEffect
         kotlinx.coroutines.delay(100)
         if (state.isStarted && !state.isPaused) {
-            focusRequester.requestFocus()
+            gameFocus.requestFocus()
         } else if (!state.isStarted && !mpDialogVisible) {
             startButtonFocus.requestFocus()
         }
@@ -494,7 +494,7 @@ fun GameContent(state: SnakeState, settings: GameSettings, vm: GameViewModel, fo
         Box(
             Modifier.weight(1f).fillMaxWidth().padding(16.dp)
                 .then(if (settings.isTVMode) {
-                    Modifier.focusRequester(focusRequester).focusable().onKeyEvent { event ->
+                    Modifier.focusRequester(gameFocus).focusable().onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown && state.isStarted) {
                             when (event.nativeKeyEvent.keyCode) {
                                 KeyEvent.KEYCODE_DPAD_UP -> { vm.setDirection(Direction.UP); true }
@@ -588,7 +588,7 @@ fun GameCanvasArea(state: SnakeState, settings: GameSettings, vm: GameViewModel,
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Button(
-                                onClick = { vm.startGame(); if (settings.isTVMode) focusRequester.requestFocus() },
+                                onClick = { vm.startGame() },
                                 modifier = Modifier.height(52.dp).width(180.dp).then(
                                     if (settings.isTVMode && startButtonFocus != null) Modifier.focusRequester(startButtonFocus).focusable()
                                     else if (settings.isTVMode) Modifier.focusable()
@@ -815,7 +815,7 @@ fun MultiplayerItemsOverlay(items: Map<String, Int>) {
 @Composable
 fun MultiplayerGameView(mpVm: MultiplayerViewModel, settings: GameSettings = GameSettings()) {
     val state = mpVm.uiState.gameState ?: return
-    val focusRequester = remember { FocusRequester() }
+    val mpFocus = remember { FocusRequester() }
     val colorScheme = MaterialTheme.colorScheme
 
     Column(Modifier.fillMaxSize().background(colorScheme.background)) {
@@ -840,7 +840,7 @@ fun MultiplayerGameView(mpVm: MultiplayerViewModel, settings: GameSettings = Gam
 
                 Canvas(
                     Modifier.fillMaxSize()
-                        .focusRequester(focusRequester)
+                        .focusRequester(mpFocus)
                         .focusable()
                         .onKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown) {
@@ -868,7 +868,7 @@ fun MultiplayerGameView(mpVm: MultiplayerViewModel, settings: GameSettings = Gam
                     drawMultiplayerGame(state, cellSizePx, viewOffX, viewOffY, constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), colorScheme)
                 }
 
-                LaunchedEffect(Unit) { focusRequester.requestFocus() }
+                LaunchedEffect(Unit) { mpFocus.requestFocus() }
             }
         }
 
