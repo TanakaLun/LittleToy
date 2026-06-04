@@ -39,6 +39,7 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
     private var gameState = MultiplayerGameState()
     private var gameJob: Job? = null
     private var isRunning = false
+    var settings: GameSettings = GameSettings()
 
     private val _status = MutableStateFlow(ServerStatus())
     val status: StateFlow<ServerStatus> = _status.asStateFlow()
@@ -147,7 +148,37 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                         }
                         "StartGame" -> {
                             if (gameState.isGameOver || gameJob?.isActive != true) {
-                                restartGame()
+                                synchronized(connectedPlayers) {
+                                    val host = connectedPlayers.firstOrNull()
+                                    if (host != null && host.id == playerId) {
+                                        broadcast(ServerMessage.RestartRequested(hostName))
+                                    }
+                                }
+                            }
+                        }
+                        "RestartResponse" -> {
+                            val msg = networkJson.decodeFromString<ClientMessage.RestartResponse>(wire.json)
+                            synchronized(gameState) {
+                                if (!msg.accept) {
+                                    val p = synchronized(connectedPlayers) { connectedPlayers.find { it.id == playerId } }
+                                    if (p != null) {
+                                        synchronized(connectedPlayers) { connectedPlayers.remove(p) }
+                                        broadcast(ServerMessage.PlayerLeft(p.id))
+                                        updateStatus()
+                                    }
+                                } else if (allPlayersResponded()) {
+                                    restartGame()
+                                }
+                            }
+                        }
+                        "Rejoin" -> {
+                            synchronized(gameState) {
+                                gameState = rejoinPlayer(gameState, playerId)
+                                if (gameState.isGameOver == false) {
+                                    val serialized = serializeGameState(gameState)
+                                    broadcast(ServerMessage.GameState(serialized))
+                                    sendToClientByName(playerId, ServerMessage.RejoinSuccess(playerId))
+                                }
                             }
                         }
                         "Leave" -> break
@@ -179,7 +210,7 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
         _gameStateFlow.value = gameState
         gameJob = scope.launch {
             while (isRunning) {
-                val currentState = synchronized(gameState) { gameState }
+                var currentState = synchronized(gameState) { gameState }
                 if (currentState.isGameOver) {
                     val winner = currentState.players.maxByOrNull { it.score }
                     if (winner != null) {
@@ -190,10 +221,20 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
 
                 delay(gameTickIntervalMs(currentState))
                 val updatedState = synchronized(gameState) {
-                    gameState = multiplayerGameTick(gameState)
+                    gameState = multiplayerGameTick(gameState, settings)
                     gameState
                 }
                 _gameStateFlow.value = updatedState
+
+                // Send death notifications to players who newly died in deadly mode
+                if (settings.multiplayerGameMode == MultiplayerGameMode.DEADLY) {
+                    updatedState.players.forEach { p ->
+                        val wasAlive = currentState.players.find { it.id == p.id }?.isAlive ?: false
+                        if (wasAlive && !p.isAlive && p.awaitingRejoin) {
+                            sendToClientByName(p.id, ServerMessage.DeathNotification(true))
+                        }
+                    }
+                }
 
                 val serialized = serializeGameState(updatedState)
                 broadcast(ServerMessage.GameState(serialized))
@@ -215,7 +256,9 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                     ghostTimeRemaining = p.ghostTimeRemaining,
                     invincibleTimeRemaining = p.invincibleTimeRemaining,
                     colorIndex = gs.players.indexOf(p),
-                    itemsCollected = p.itemsCollected
+                    itemsCollected = p.itemsCollected,
+                    deathCount = p.deathCount,
+                    awaitingRejoin = p.awaitingRejoin
                 )
             },
             objects = gs.objects.map { SerializedGameObject(it.pos.first, it.pos.second, it.type.name, it.timeLeft) },
@@ -253,6 +296,19 @@ class LanServer(private val hostName: String, private val scope: CoroutineScope)
                 gameStarted = gameJob?.isActive == true
             )
         }
+    }
+
+    private fun allPlayersResponded(): Boolean {
+        return synchronized(connectedPlayers) {
+            connectedPlayers.all { cp ->
+                gameState.players.none { it.id == cp.id } || gameState.players.find { it.id == cp.id }?.isAlive == false
+            }
+        }
+    }
+
+    private fun sendToClientByName(playerId: String, msg: ServerMessage) {
+        val player = synchronized(connectedPlayers) { connectedPlayers.find { it.id == playerId } }
+        if (player != null) sendToClient(player, msg)
     }
 
     fun restartGame() {

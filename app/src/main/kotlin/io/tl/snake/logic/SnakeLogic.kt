@@ -32,6 +32,7 @@ object GameConfig {
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 enum class ControlMode { SWIPE, BUTTONS, TV_REMOTE }
+enum class MultiplayerGameMode(val label: String) { ENDLESS("无尽"), DEADLY("绝命") }
 
 enum class ItemType(val colorHex: Long, val score: Int, val weight: Float, val label: String) {
     FOOD_BASIC(0xFF4CAF50, 10, 0.6f, "Basic"),
@@ -60,7 +61,8 @@ data class GameSettings(
     val controlMode: ControlMode = ControlMode.SWIPE,
     val isTVMode: Boolean = false,
     val difficulty: Difficulty = Difficulty.NORMAL,
-    val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true }
+    val enabledItems: Map<ItemType, Boolean> = ItemType.entries.associateWith { true },
+    val multiplayerGameMode: MultiplayerGameMode = MultiplayerGameMode.DEADLY
 )
 
 data class SnakeState(

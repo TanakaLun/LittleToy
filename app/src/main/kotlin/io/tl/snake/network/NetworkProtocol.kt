@@ -42,7 +42,9 @@ data class SerializedPlayerState(
     val ghostTimeRemaining: Long,
     val invincibleTimeRemaining: Long,
     val colorIndex: Int,
-    val itemsCollected: Map<String, Int> = emptyMap()
+    val itemsCollected: Map<String, Int> = emptyMap(),
+    val deathCount: Int = 0,
+    val awaitingRejoin: Boolean = false
 )
 
 @Serializable
@@ -79,6 +81,15 @@ sealed interface ServerMessage {
 
     @Serializable
     data class LobbyUpdate(val players: List<PlayerInfo>) : ServerMessage
+
+    @Serializable
+    data class RestartRequested(val hostName: String) : ServerMessage
+
+    @Serializable
+    data class DeathNotification(val canRejoin: Boolean) : ServerMessage
+
+    @Serializable
+    data class RejoinSuccess(val playerId: String) : ServerMessage
 }
 
 sealed interface ClientMessage {
@@ -93,6 +104,12 @@ sealed interface ClientMessage {
 
     @Serializable
     data object Leave : ClientMessage
+
+    @Serializable
+    data class RestartResponse(val accept: Boolean) : ClientMessage
+
+    @Serializable
+    data object Rejoin : ClientMessage
 }
 
 @Serializable
@@ -111,6 +128,9 @@ fun serializeServerMessage(msg: ServerMessage): String {
         is ServerMessage.Error -> WireMessage("Error", networkJson.encodeToString(msg))
         is ServerMessage.GameStarted -> WireMessage("GameStarted", networkJson.encodeToString(msg))
         is ServerMessage.LobbyUpdate -> WireMessage("LobbyUpdate", networkJson.encodeToString(msg))
+        is ServerMessage.RestartRequested -> WireMessage("RestartRequested", networkJson.encodeToString(msg))
+        is ServerMessage.DeathNotification -> WireMessage("DeathNotification", networkJson.encodeToString(msg))
+        is ServerMessage.RejoinSuccess -> WireMessage("RejoinSuccess", networkJson.encodeToString(msg))
     }.let { networkJson.encodeToString(it) }
 }
 
@@ -120,6 +140,8 @@ fun serializeClientMessage(msg: ClientMessage): String {
         is ClientMessage.Direction -> WireMessage("Direction", networkJson.encodeToString(msg))
         is ClientMessage.StartGame -> WireMessage("StartGame", networkJson.encodeToString(msg))
         is ClientMessage.Leave -> WireMessage("Leave", networkJson.encodeToString(msg))
+        is ClientMessage.RestartResponse -> WireMessage("RestartResponse", networkJson.encodeToString(msg))
+        is ClientMessage.Rejoin -> WireMessage("Rejoin", networkJson.encodeToString(msg))
     }.let { networkJson.encodeToString(it) }
 }
 

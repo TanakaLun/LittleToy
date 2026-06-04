@@ -43,6 +43,15 @@ class LanClient(private val scope: CoroutineScope) {
     private val _gameOver = MutableStateFlow<Pair<String, String>?>(null)
     val gameOver: StateFlow<Pair<String, String>?> = _gameOver.asStateFlow()
 
+    private val _restartRequested = MutableStateFlow<String?>(null)
+    val restartRequested: StateFlow<String?> = _restartRequested.asStateFlow()
+
+    private val _deathNotification = MutableStateFlow<Boolean>(false)
+    val deathNotification: StateFlow<Boolean> = _deathNotification.asStateFlow()
+
+    private val _rejoinSuccess = MutableStateFlow(false)
+    val rejoinSuccess: StateFlow<Boolean> = _rejoinSuccess.asStateFlow()
+
     companion object {
         private const val TCP_PORT = 54321
         private const val DISCOVERY_PORT = 54322
@@ -119,6 +128,17 @@ class LanClient(private val scope: CoroutineScope) {
                     val msg = networkJson.decodeFromString<ServerMessage.Error>(wire.json)
                     println("Server error: ${msg.message}")
                 }
+                "RestartRequested" -> {
+                    val msg = networkJson.decodeFromString<ServerMessage.RestartRequested>(wire.json)
+                    _restartRequested.value = msg.hostName
+                }
+                "DeathNotification" -> {
+                    val msg = networkJson.decodeFromString<ServerMessage.DeathNotification>(wire.json)
+                    _deathNotification.value = msg.canRejoin
+                }
+                "RejoinSuccess" -> {
+                    _rejoinSuccess.value = true
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -141,6 +161,22 @@ class LanClient(private val scope: CoroutineScope) {
         }
     }
 
+    fun sendRestartResponse(accept: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                writer?.println(serializeClientMessage(ClientMessage.RestartResponse(accept)))
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun sendRejoin() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                writer?.println(serializeClientMessage(ClientMessage.Rejoin))
+            } catch (_: Exception) {}
+        }
+    }
+
     fun disconnect() {
         isRunning = false
         try {
@@ -153,6 +189,9 @@ class LanClient(private val scope: CoroutineScope) {
         _status.value = ClientStatus()
         _gameState.value = null
         _gameOver.value = null
+        _restartRequested.value = null
+        _deathNotification.value = false
+        _rejoinSuccess.value = false
     }
 
     suspend fun discoverServers(): List<DiscoveredServer> = withContext(Dispatchers.IO) {

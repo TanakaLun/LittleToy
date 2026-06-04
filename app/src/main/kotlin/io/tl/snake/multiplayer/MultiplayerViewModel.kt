@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.tl.snake.data.GameRepository
+import io.tl.snake.logic.GameSettings
 import io.tl.snake.network.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -29,7 +30,11 @@ data class MultiplayerUiState(
     val gameState: SerializedGameState? = null,
     val winnerId: String = "",
     val winnerName: String = "",
-    val isDiscovering: Boolean = false
+    val isDiscovering: Boolean = false,
+    val restartRequested: Boolean = false,
+    val restartHostName: String = "",
+    val deathDialogShown: Boolean = false,
+    val canRejoin: Boolean = false
 )
 
 class MultiplayerViewModel(application: Application) : AndroidViewModel(application) {
@@ -41,9 +46,13 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
     var uiState by mutableStateOf(MultiplayerUiState())
         private set
 
+    var settings: GameSettings = GameSettings()
+        private set
+
     init {
         viewModelScope.launch {
             identity = repository.loadPlayerIdentity()
+            repository.loadSettings()?.let { settings = it }
             uiState = uiState.copy(playerName = identity.playerName)
         }
     }
@@ -82,6 +91,7 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
         observeJob?.cancel()
         uiState = uiState.copy(isHost = true, screen = MultiplayerScreen.LOBBY)
         server = LanServer(uiState.playerName, viewModelScope)
+        server!!.settings = settings
         server!!.start()
 
         client = LanClient(viewModelScope)
@@ -128,7 +138,8 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
                             screen = MultiplayerScreen.VICTORY,
                             showDialog = false,
                             winnerId = winnerId,
-                            winnerName = winnerName
+                            winnerName = winnerName,
+                            deathDialogShown = false
                         )
                     }
                 }
@@ -140,6 +151,34 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
                         uiState = uiState.copy(
                             lobbyPlayers = serverStatus.players
                         )
+                    }
+                }
+            }
+
+            launch {
+                client?.restartRequested?.collectLatest { hostName ->
+                    uiState = uiState.copy(
+                        restartRequested = hostName != null,
+                        restartHostName = hostName ?: ""
+                    )
+                }
+            }
+
+            launch {
+                client?.deathNotification?.collectLatest { canRejoin ->
+                    if (canRejoin) {
+                        uiState = uiState.copy(
+                            deathDialogShown = true,
+                            canRejoin = true
+                        )
+                    }
+                }
+            }
+
+            launch {
+                client?.rejoinSuccess?.collectLatest { success ->
+                    if (success) {
+                        uiState = uiState.copy(deathDialogShown = false)
                     }
                 }
             }
@@ -184,7 +223,9 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
             gameState = null,
             lobbyPlayers = emptyList(),
             winnerId = "",
-            winnerName = ""
+            winnerName = "",
+            restartRequested = false,
+            deathDialogShown = false
         )
         startAutoRefresh()
     }
@@ -198,25 +239,40 @@ class MultiplayerViewModel(application: Application) : AndroidViewModel(applicat
     fun backToLobby() {
         uiState = uiState.copy(
             screen = MultiplayerScreen.LOBBY,
+            showDialog = true,
             gameStarted = false,
             gameState = null,
             winnerId = "",
-            winnerName = ""
+            winnerName = "",
+            restartRequested = false
         )
     }
 
     fun requestRestartGame() {
         if (uiState.isHost) {
-            server?.restartGame()
-        } else {
             client?.requestStartGame()
         }
-        uiState = uiState.copy(
-            gameStarted = false,
-            gameState = null,
-            winnerId = "",
-            winnerName = ""
-        )
+    }
+
+    fun respondToRestart(accept: Boolean) {
+        client?.sendRestartResponse(accept)
+        uiState = uiState.copy(restartRequested = false)
+        if (accept) {
+            uiState = uiState.copy(
+                screen = MultiplayerScreen.GAME,
+                showDialog = false,
+                gameStarted = true
+            )
+        }
+    }
+
+    fun respondToDeath(shouldRejoin: Boolean) {
+        uiState = uiState.copy(deathDialogShown = false)
+        if (shouldRejoin) {
+            client?.sendRejoin()
+        } else {
+            backToBrowser()
+        }
     }
 
     fun leaveMultiplayerGame() {

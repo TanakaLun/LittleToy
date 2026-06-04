@@ -5,6 +5,7 @@ import io.tl.snake.logic.ControlMode
 import io.tl.snake.logic.Difficulty
 import io.tl.snake.logic.GameSettings
 import io.tl.snake.logic.ItemType
+import io.tl.snake.logic.MultiplayerGameMode
 import io.tl.snake.network.PlayerIdentity
 import org.json.JSONObject
 import java.util.UUID
@@ -52,7 +53,8 @@ class GameRepository(private val context: Context) {
             controlMode = ControlMode.valueOf(json.optString("controlMode", "SWIPE")),
             isTVMode = json.optBoolean("isTVMode", false),
             difficulty = try { Difficulty.valueOf(json.optString("difficulty", "NORMAL")) } catch (_: Exception) { Difficulty.NORMAL },
-            enabledItems = itemMap
+            enabledItems = itemMap,
+            multiplayerGameMode = try { MultiplayerGameMode.valueOf(json.optString("multiplayerGameMode", "DEADLY")) } catch (_: Exception) { MultiplayerGameMode.DEADLY }
         )
     }
 
@@ -69,6 +71,7 @@ class GameRepository(private val context: Context) {
             put("controlMode", settings.controlMode.name)
             put("isTVMode", settings.isTVMode)
             put("difficulty", settings.difficulty.name)
+            put("multiplayerGameMode", settings.multiplayerGameMode.name)
             put("enabledItems", JSONObject().apply {
                 settings.enabledItems.forEach { (k, v) -> put(k.name, v) }
             })

@@ -5,6 +5,7 @@ import io.tl.snake.logic.GameConfig
 import io.tl.snake.logic.GameObject
 import io.tl.snake.logic.GameSettings
 import io.tl.snake.logic.ItemType
+import io.tl.snake.logic.MultiplayerGameMode
 import kotlin.random.Random
 
 data class MultiplayerPlayer(
@@ -18,7 +19,9 @@ data class MultiplayerPlayer(
     val ghostTimeRemaining: Long = 0L,
     val invincibleTimeRemaining: Long = 0L,
     val disconnected: Boolean = false,
-    val itemsCollected: Map<String, Int> = emptyMap()
+    val itemsCollected: Map<String, Int> = emptyMap(),
+    val deathCount: Int = 0,
+    val awaitingRejoin: Boolean = false
 )
 
 data class MultiplayerGameState(
@@ -84,7 +87,7 @@ fun multiplayerGameTick(state: MultiplayerGameState, settings: GameSettings? = n
     if (state.isGameOver) return state
 
     val currentSpeed = GameConfig.BASE_SPEED
-    val maxObjs = GameConfig.dynamicMaxObjects(state.gridWidth, state.gridHeight)
+    val gameMode = settings?.multiplayerGameMode ?: MultiplayerGameMode.DEADLY
 
     val newHeads = state.players.associate { player ->
         if (!player.isAlive || player.disconnected) return@associate player.id to null
@@ -123,10 +126,189 @@ fun multiplayerGameTick(state: MultiplayerGameState, settings: GameSettings? = n
         val hitBody = !inHeadToHead && !hitOtherHead && state.players.any { other ->
             other.id != player.id && other.isAlive && other.snake.drop(1).any { it == newHead }
         }
+
+        val collision = inHeadToHead || hitOtherHead || (hitBody && !isGhostActive)
+
+        if (collision && !isInvincible) {
+            if (newShieldCount > 0) {
+                newShieldCount--
+                newInvincibleTime = GameConfig.INVINCIBLE_DURATION_MS
+            } else if (gameMode == MultiplayerGameMode.ENDLESS) {
+                val halfScore = ((newScore + 1) / 2).coerceAtLeast(0)
+                val halfLength = maxOf(3, (player.snake.size + 1) / 2)
+                val trimmedSnake = player.snake.take(halfLength)
+                newScore = halfScore
+                return@map player.copy(
+                    snake = trimmedSnake, score = newScore,
+                    shieldCount = newShieldCount, ghostTimeRemaining = newGhostTime,
+                    invincibleTimeRemaining = newInvincibleTime,
+                    itemsCollected = player.itemsCollected
+                )
+            } else {
+                newScore = ((newScore + 1) / 2).coerceAtLeast(0)
+                return@map player.copy(
+                    snake = emptyList(), score = newScore, isAlive = false,
+                    shieldCount = newShieldCount, ghostTimeRemaining = newGhostTime,
+                    invincibleTimeRemaining = newInvincibleTime,
+                    itemsCollected = player.itemsCollected,
+                    deathCount = player.deathCount + 1,
+                    awaitingRejoin = true
+                )
+            }
+        }
+
+        var newSnake = player.snake.toMutableList().apply { add(0, newHead) }
+        return@map player.copy(
+            snake = newSnake, score = newScore, isAlive = true,
+            shieldCount = newShieldCount, ghostTimeRemaining = newGhostTime,
+            invincibleTimeRemaining = newInvincibleTime,
+            itemsCollected = player.itemsCollected
+        )
+    }.toMutableList()
+
+    // No item decay in multiplayer (Task 3a)
+    var updatedObjects = state.objects.toMutableList()
+
+    val ateFood = mutableSetOf<Int>()
+
+    for (i in updatedPlayers.indices) {
+        val player = updatedPlayers[i]
+        if (!player.isAlive || player.disconnected) continue
+
+        val head = player.snake.first()
+        val hitObj = updatedObjects.find { it.pos == head }
+        if (hitObj != null) {
+            updatedObjects.removeIf { it.pos == head }
+            val newScore = (player.score + hitObj.type.score).coerceAtLeast(0)
+            var newSnake = player.snake.toMutableList()
+            if (hitObj.type.score <= 0) {
+                newSnake.removeAt(newSnake.size - 1)
+            }
+            var newShield = player.shieldCount
+            var newGhost = player.ghostTimeRemaining
+            var newInvincible = player.invincibleTimeRemaining
+            val newItems = player.itemsCollected.toMutableMap()
+            val key = hitObj.type.name
+            newItems[key] = (newItems[key] ?: 0) + 1
+            when (hitObj.type) {
+                ItemType.SHIELD -> newShield++
+                ItemType.CLOVER -> newShield += Random.nextInt(1, 4)
+                ItemType.GHOST -> if (newGhost <= 0) newGhost = GameConfig.GHOST_DURATION_MS
+                else -> {}
+            }
+            ateFood.add(i)
+            updatedPlayers[i] = player.copy(
+                snake = newSnake, score = newScore,
+                shieldCount = newShield, ghostTimeRemaining = newGhost,
+                invincibleTimeRemaining = newInvincible,
+                itemsCollected = newItems
+            )
+        }
+    }
+
+    for (i in updatedPlayers.indices) {
+        val player = updatedPlayers[i]
+        if (!player.isAlive || player.disconnected) continue
+        if (i !in ateFood) {
+            val newSnake = player.snake.toMutableList()
+            newSnake.removeAt(newSnake.size - 1)
+            updatedPlayers[i] = player.copy(snake = newSnake)
+        }
+    }
+
+    // No max objects limit in multiplayer (Task 3b)
+    if (Random.nextFloat() < 0.15f) {
+        val newPos = Random.nextInt(state.gridWidth) to Random.nextInt(state.gridHeight)
+        val allOccupied = updatedPlayers.filter { it.isAlive }.flatMap { it.snake }.toSet() +
+            updatedObjects.map { it.pos }.toSet()
+        if (newPos !in allOccupied) {
+            val allowedTypes = ItemType.entries.filter { it.weight > 0.01f }
+            if (allowedTypes.isNotEmpty()) {
+                val totalWeight = allowedTypes.sumOf { it.weight.toDouble() }
+                val r = Random.nextDouble() * totalWeight
+                var acc = 0.0
+                val selectedType = allowedTypes.first { acc += it.weight; r <= acc }
+                updatedObjects.add(GameObject(newPos, selectedType))
+            }
+        }
+    }
+
+    val alivePlayers = updatedPlayers.filter { it.isAlive }
+    val awaitingRejoin = updatedPlayers.any { it.awaitingRejoin }
+    val isGameOver = alivePlayers.size <= 1 && !awaitingRejoin
+    val winner = if (isGameOver) updatedPlayers.maxByOrNull { it.score }?.id ?: "" else ""
+
+    return state.copy(
+        players = updatedPlayers,
+        objects = updatedObjects,
+        isGameOver = isGameOver,
+        winnerId = winner
+    )
+}
+
+fun rejoinPlayer(state: MultiplayerGameState, playerId: String): MultiplayerGameState {
+    val playerIndex = state.players.indexOfFirst { it.id == playerId }
+    if (playerIndex < 0) return state
+    val player = state.players[playerIndex]
+    if (!player.awaitingRejoin) return state
+
+    val n = state.players.size
+    val col = (playerIndex % n) * 100 + 50
+    val row = (playerIndex / n) * 100 + 50
+    val dir = when (playerIndex % 4) { 0 -> Direction.DOWN; 1 -> Direction.UP; 2 -> Direction.RIGHT; else -> Direction.LEFT }
+    val (dx, dy) = when (dir) {
+        Direction.UP -> 0 to 1; Direction.DOWN -> 0 to -1
+        Direction.LEFT -> 1 to 0; Direction.RIGHT -> -1 to 0
+    }
+    val startSnake = listOf(
+        col to row,
+        col + dx to row + dy,
+        col + dx * 2 to row + dy * 2
+    )
+
+    val updatedPlayers = state.players.toMutableList()
+    updatedPlayers[playerIndex] = player.copy(
+        snake = startSnake, direction = dir, isAlive = true,
+        score = 0, shieldCount = 0, ghostTimeRemaining = 0L,
+        invincibleTimeRemaining = 0L, awaitingRejoin = false
+    )
+    return state.copy(players = updatedPlayers, isGameOver = false, winnerId = "")
+}
+        var ny = when (player.direction) {
+            Direction.UP -> head.second - 1; Direction.DOWN -> head.second + 1; else -> head.second
+        }
+        nx = (nx + state.gridWidth) % state.gridWidth
+        ny = (ny + state.gridHeight) % state.gridHeight
+        player.id to (nx to ny)
+    }
+
+    val newHeadPositions = newHeads.filterValues { it != null }.mapValues { it.value!! }
+
+    val headToHead = newHeadPositions.entries.groupBy({ it.value }, { it.key }).filter { it.value.size > 1 }
+
+    val updatedPlayers = state.players.map { player ->
+        if (!player.isAlive || player.disconnected) return@map player
+
+        val newHead = newHeadPositions[player.id] ?: return@map player
+        val isInvincible = player.invincibleTimeRemaining > 0
+        val isGhostActive = player.ghostTimeRemaining > 0 || isInvincible
+
+        var newScore = player.score
+        var newShieldCount = player.shieldCount
+        var newGhostTime = (player.ghostTimeRemaining - currentSpeed).coerceAtLeast(0L)
+        var newInvincibleTime = (player.invincibleTimeRemaining - currentSpeed).coerceAtLeast(0L)
+
+        val inHeadToHead = headToHead.containsKey(newHead)
+        val hitOtherHead = !inHeadToHead && state.players.any { other ->
+            other.id != player.id && other.isAlive && other.snake.first() == newHead
+        }
+        val hitBody = !inHeadToHead && !hitOtherHead && state.players.any { other ->
+            other.id != player.id && other.isAlive && other.snake.drop(1).any { it == newHead }
+        }
         val hitSelf = !inHeadToHead && !hitOtherHead && !hitBody &&
             player.snake.drop(1).any { it == newHead }
 
-        val collision = inHeadToHead || hitOtherHead || (hitBody && !isGhostActive) || (hitSelf && !isGhostActive)
+        val collision = inHeadToHead || hitOtherHead || (hitBody && !isGhostActive)
 
         if (collision && !isInvincible) {
             if (newShieldCount > 0) {

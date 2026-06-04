@@ -1,14 +1,14 @@
 [versions]
-agp = "9.0.1"
-kotlin = "2.3.10"
-coreKtx = "1.17.0"
-lifecycleRuntimeKtx = "2.9.2"
-activityCompose = "1.11.0"
-composeBom = "2026.02.00"
+agp = "9.2.1"
+kotlin = "2.3.21"
+coreKtx = "1.18.0"
+lifecycleRuntimeKtx = "2.10.0"
+activityCompose = "1.13.0"
+composeBom = "2026.04.01"
+room = "2.8.4"
 ksp = "2.3.7"
-room = "2.7.1"
 kotlinxSerialization = "1.7.3"
-kotlinxCoroutinesCore = "1.9.0"
+kotlinxCoroutinesCore = "1.10.2"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

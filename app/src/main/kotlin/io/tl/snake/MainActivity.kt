@@ -120,6 +120,8 @@ class MainActivity : ComponentActivity() {
                                 winnerId = mpVm.uiState.winnerId,
                                 winnerName = mpVm.uiState.winnerName,
                                 myId = mpVm.uiState.playerId,
+                                players = mpVm.uiState.gameState?.players ?: emptyList(),
+                                isHost = mpVm.uiState.isHost,
                                 onRestart = { mpVm.requestRestartGame() },
                                 onBackToLobby = { mpVm.backToLobby() },
                                 onBackToMenu = { mpVm.closeDialog() }
@@ -164,6 +166,48 @@ class MainActivity : ComponentActivity() {
 
                     if (mpVm.uiState.showDialog) {
                         MultiplayerDialog(mpVm)
+                    }
+
+                    if (mpVm.uiState.restartRequested) {
+                        AlertDialog(
+                            onDismissRequest = {},
+                            title = { Text("Play Again?", fontWeight = FontWeight.Bold) },
+                            text = {
+                                Text("${mpVm.uiState.restartHostName} wants to play again!")
+                            },
+                            confirmButton = {
+                                Button(onClick = { mpVm.respondToRestart(true) }) {
+                                    Icon(Icons.Default.Check, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("JOIN")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { mpVm.respondToRestart(false) }) {
+                                    Text("LEAVE")
+                                }
+                            }
+                        )
+                    }
+
+                    if (mpVm.uiState.deathDialogShown) {
+                        AlertDialog(
+                            onDismissRequest = {},
+                            title = { Text("You Died!", fontWeight = FontWeight.Bold) },
+                            text = { Text("Do you want to rejoin the game or leave?") },
+                            confirmButton = {
+                                Button(onClick = { mpVm.respondToDeath(true) }) {
+                                    Icon(Icons.Default.Replay, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("REJOIN")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { mpVm.respondToDeath(false) }) {
+                                    Text("LEAVE")
+                                }
+                            }
+                        )
                     }
 
                     if (showPlayerNameDialog) {
@@ -415,46 +459,90 @@ fun MultiplayerLobbyDialog(mpVm: MultiplayerViewModel) {
 }
 
 @Composable
-fun MultiplayerVictoryScreen(winnerId: String, winnerName: String, myId: String, onRestart: () -> Unit, onBackToLobby: () -> Unit, onBackToMenu: () -> Unit) {
+fun MultiplayerVictoryScreen(winnerId: String, winnerName: String, myId: String, players: List<SerializedPlayerState>, isHost: Boolean, onRestart: () -> Unit, onBackToLobby: () -> Unit, onBackToMenu: () -> Unit) {
     val isWinner = winnerId == myId
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.7f)), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    val sortedPlayers = remember(players) { players.sortedByDescending { it.score } }
+    var expandedPlayer by remember { mutableStateOf<String?>(null) }
+
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.85f)), contentAlignment = Alignment.Center) {
+        Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(
                 if (isWinner) Icons.Default.EmojiEvents else Icons.Default.MilitaryTech,
-                null, Modifier.size(80.dp),
+                null, Modifier.size(60.dp),
                 tint = if (isWinner) Color(0xFFFFD700) else Color.White.copy(0.5f)
             )
-            Spacer(Modifier.height(16.dp))
             Text(
                 if (isWinner) "YOU WIN!" else "$winnerName WINS!",
-                fontWeight = FontWeight.Black, fontSize = 40.sp, color = Color.White,
+                fontWeight = FontWeight.Black, fontSize = 28.sp, color = Color.White,
                 textAlign = TextAlign.Center
             )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                if (isWinner) "Congratulations!" else "Better luck next time.",
-                color = Color.White.copy(0.6f), fontSize = 16.sp
-            )
-            Spacer(Modifier.height(40.dp))
-            Button(onClick = onRestart, modifier = Modifier.width(200.dp)) {
-                Icon(Icons.Default.Replay, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("PLAY AGAIN", fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(12.dp))
-            TextButton(onClick = onBackToMenu) {
-                Text("BACK TO MENU", color = Color.White.copy(0.5f))
-            }
-        }
+            Spacer(Modifier.height(4.dp))
 
-        val particles = remember { List(60) { ConfettiParticle() } }
-        val infiniteTransition = rememberInfiniteTransition("victory_confetti")
-        val progress by infiniteTransition.animateFloat(0f, 1f, infiniteRepeatable(tween(3000, easing = LinearEasing)), "")
-        Canvas(Modifier.fillMaxSize()) {
-            particles.forEach { p ->
-                val y = (p.startY + (progress * 1800f * p.speed)) % size.height
-                val x = p.startX + (progress * 300f * p.drift)
-                drawRect(color = p.color, topLeft = Offset(x, y), size = Size(12f, 24f), alpha = 1f - (y / size.height).coerceIn(0f, 1f))
+            Text("RANKINGS", fontWeight = FontWeight.Black, fontSize = 12.sp, color = Color.White.copy(0.6f))
+            Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                sortedPlayers.forEachIndexed { i, player ->
+                    val rankColor = when (i) { 0 -> Color(0xFFFFD700); 1 -> Color(0xFFC0C0C0); 2 -> Color(0xFFCD7F32); else -> Color.White.copy(0.4f) }
+                    val medal = when (i) { 0 -> "1st"; 1 -> "2nd"; 2 -> "3rd"; else -> "${i + 1}th" }
+                    val isExpanded = expandedPlayer == player.id
+
+                    Surface(
+                        onClick = { expandedPlayer = if (isExpanded) null else player.id },
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        color = if (player.id == myId) MaterialTheme.colorScheme.primaryContainer.copy(0.4f) else Color.White.copy(0.08f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(Modifier.padding(10.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(medal, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = rankColor, modifier = Modifier.width(32.dp))
+                                if (player.isAlive) {
+                                    Icon(Icons.Default.Favorite, null, Modifier.size(10.dp), tint = Color(0xFF4CAF50))
+                                    Spacer(Modifier.width(4.dp))
+                                }
+                                Text(player.name, fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.White, modifier = Modifier.weight(1f))
+                                Text("${player.score}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = rankColor)
+                                Icon(
+                                    if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    null, Modifier.size(18.dp), tint = Color.White.copy(0.5f)
+                                )
+                            }
+                            AnimatedVisibility(visible = isExpanded) {
+                                Column(Modifier.padding(start = 32.dp, top = 8.dp)) {
+                                    if (player.itemsCollected.isEmpty()) {
+                                        Text("No items collected", fontSize = 11.sp, color = Color.White.copy(0.4f))
+                                    } else {
+                                        player.itemsCollected.filter { it.value > 0 }.forEach { (typeName, count) ->
+                                            val type = try { ItemType.valueOf(typeName) } catch (_: Exception) { null }
+                                            if (type != null) {
+                                                Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(type.icon, null, Modifier.size(14.dp), tint = Color(type.colorHex))
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text("${type.label} x$count", fontSize = 12.sp, color = Color.White.copy(0.7f))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            if (isHost) {
+                Button(onClick = onRestart, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Icon(Icons.Default.Replay, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("PLAY AGAIN", fontWeight = FontWeight.Bold)
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onBackToLobby, modifier = Modifier.weight(1f)) {
+                    Text("LOBBY", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+                OutlinedButton(onClick = onBackToMenu, modifier = Modifier.weight(1f)) {
+                    Text("MENU", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
             }
         }
     }
@@ -909,9 +997,24 @@ fun MultiplayerGameView(mpVm: MultiplayerViewModel, settings: GameSettings = Gam
             MultiplayerLeaderboardOverlay(stateData)
             val myId = mpVm.uiState.playerId
             val myPlayer = stateData.players.find { it.id == myId }
-            if (myPlayer != null && myPlayer.itemsCollected.isNotEmpty()) {
-                Box(Modifier.padding(top = 170.dp).width(140.dp)) {
-                    MultiplayerItemsOverlay(myPlayer.itemsCollected)
+            if (myPlayer != null) {
+                Column(Modifier.padding(top = 170.dp, end = 8.dp).width(140.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (myPlayer.shieldCount > 0) {
+                        Surface(color = Color(ItemType.SHIELD.colorHex), shape = RoundedCornerShape(8.dp)) {
+                            Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Shield, null, Modifier.size(14.dp), tint = Color.White)
+                                Text("${myPlayer.shieldCount}", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 4.dp))
+                            }
+                        }
+                    }
+                    if (myPlayer.ghostTimeRemaining > 0) {
+                        Surface(color = Color(ItemType.GHOST.colorHex), shape = RoundedCornerShape(8.dp)) {
+                            Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Deblur, null, Modifier.size(14.dp), tint = Color.White)
+                                Text("GHOST", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 4.dp))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -927,6 +1030,32 @@ fun SettingsDialog(settings: GameSettings, playerName: String, onDismiss: () -> 
                 SettingRow("TV Mode Adapter") {
                     Switch(checked = settings.isTVMode, onCheckedChange = { onUpdate(settings.copy(isTVMode = it)) })
                 }
+
+                Spacer(Modifier.height(4.dp))
+                Text("Multiplayer Mode", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(0.7f))
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    MultiplayerGameMode.entries.forEach { mode ->
+                        val selected = settings.multiplayerGameMode == mode
+                        Surface(
+                            onClick = { onUpdate(settings.copy(multiplayerGameMode = mode)) },
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(0.5f),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.height(36.dp)
+                        ) {
+                            Text(
+                                mode.label,
+                                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
 
                 Spacer(Modifier.height(4.dp))
                 Text("Difficulty", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(0.7f))
